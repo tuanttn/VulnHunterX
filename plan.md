@@ -267,7 +267,7 @@ Trên 20 alert dev, mọi method và điều kiện: đo **số run/giờ** và 
 - [ ] Tạo branch làm việc theo `docs/GIT_WORKFLOW.md` (đang ở `exp-implementation`; chưa commit gì; mở PR tổng ngay ngày 1, không cần chờ Tuannt chốt mục 10)
 
 ### Ngày 2 – Thứ Năm 19/11: OWASP + scan dev
-> **Tiến độ ngày 2 (cập nhật):** xong phần dữ liệu, chi tiết và hash trong `docs/paper/run_log.md` (mục Day 2). Code ở branch `exp/day2-data-prep` (B3b + B3a + dev gộp một PR), chưa commit. Commit OWASP `a452b3a` đang dùng **tạm**, chờ anh Tuannt. Kết quả chính: manifest OWASP 809 alert (488 thật + 321 false alarm; ZeroFalse 868 = 531 + 337, chênh 59 hoàn toàn do rule `exec-tainted-environment` bị loại); **73.2% alert thật có data-flow rời method** (đạt ngưỡng 30%); dev Juliet họ path chỉ có 36 false alarm (12 case) → nhiều khả năng dùng pooled rule.
+> **Tiến độ ngày 2 (cập nhật):** xong phần dữ liệu, chi tiết và hash trong `docs/paper/run_log.md` (mục Day 2). Code ở branch `exp/day2-data-prep` (B3b + B3a + dev gộp một PR), commit `9de3003`, PR draft #2. Commit OWASP `a452b3a` đang dùng **tạm**, chờ anh Tuannt. Kết quả chính: manifest OWASP 809 alert (488 thật + 321 false alarm; ZeroFalse 868 = 531 + 337, chênh 59 hoàn toàn do rule `exec-tainted-environment` bị loại); **73.2% alert thật có data-flow rời method** (đạt ngưỡng 30%); dev Juliet họ path chỉ có 36 false alarm (12 case) → nhiều khả năng dùng pooled rule.
 
 - [x] **B3b** – bản copy source-only OWASP dưới `repos/java/<copy name>` (`shopapp-java`, 2763 file):
   - [x] Chỉ copy `src/main/java` (bỏ package `report/`); không expectedresults, metadata, git history
@@ -284,7 +284,7 @@ Trên 20 alert dev, mọi method và điều kiện: đo **số run/giờ** và 
   - [x] Ghi version CodeQL (2.27.4) + query pack (`java-queries` 1.12.0, `java-all` 9.3.4)
 - [x] Scan dev: Juliet (đã redact trên đĩa, có `testcasesupport/`), WebGoat, VulnerableApp
 - [x] Đếm: OWASP theo họ × nhãn (488/321, so với 868/531/337); **% alert thật có data-flow rời method = 73.2%** (ngưỡng 30%: đạt); dev theo nguồn × họ × nhãn (Juliet path: 36 false alarm trong 12 case)
-- [ ] Còn lại từ ngày 2: commit code + mở PR `exp/day2-data-prep`; dev manifest và mẫu Juliet (100 case/họ, ≥50 thật) làm ở B3c; nhãn cho alert WebGoat/VulnerableApp không khớp ground truth
+- [ ] Còn lại từ ngày 2: PR #2 chờ anh Tuannt review và merge; dev manifest và mẫu Juliet (100 case/họ, ≥50 thật) làm ở B3c; nhãn cho alert WebGoat/VulnerableApp không khớp ground truth
 
 ### Ngày 3–4 – Thứ Sáu 20/11 – Thứ Bảy 21/11: B2 + B6 (làm trước, mọi thứ khác phụ thuộc)
 - [ ] **B2:** `entry_to_finding` truyền `cwe_ids` (chuẩn hóa), message, data-flow path

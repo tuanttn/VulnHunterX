@@ -76,7 +76,7 @@ Recorded 2026-11-17 from Khoa's own account given in the working session; Khoa i
 
 ## Day 2 – Thu 19 Nov 2026 – P1 Data (run 17–18 Nov, machine clock)
 
-Status: OWASP copy, scan and manifest done; development copies scanned and counted. No model call (0 runs). Code: branch `exp/day2-data-prep` (scripts under `scripts/exp/`, tests under `tests/test_exp_*.py`; commit hash to be added when committed). Nothing in `src/` or `benchmarks/` changed. Outputs (copies, name maps, label map, SARIF, manifest) stay outside git under `exp-data/work/<copy>/`, `repos/` and `output/`; this file records hashes.
+Status: OWASP copy, scan and manifest done; development copies scanned and counted. No model call (0 runs). Code: branch `exp/day2-data-prep`, commit `9de3003`, draft PR #2 into `exp-implementation` (scripts under `scripts/exp/`, tests under `tests/test_exp_*.py`). Nothing in `src/` or `benchmarks/` changed. Outputs (copies, name maps, label map, SARIF, manifest) stay outside git under `exp-data/work/<copy>/`, `repos/` and `output/`; this file records hashes.
 Config gate: passed. Open: OWASP commit `a452b3a` is used **provisionally** (Tuannt has not confirmed it, plan §9 #5); re-run B3b and B3a if he picks another.
 
 ### B3b – renamed OWASP copy (`repos/java/shopapp-java`)
