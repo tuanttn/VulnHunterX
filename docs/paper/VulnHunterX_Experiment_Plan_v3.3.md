@@ -15,7 +15,7 @@ Code state: branch and `main` are both at commit `0fafb5c`, the commit Khoa audi
 | 3 | AI-generated code | A third, descriptive track: the Java repositories that RealVuln marks `llm_generated` |
 | 4 | Scope | Java, CodeQL, three families: SQL injection (CWE-89), command injection (CWE-78), path traversal (CWE-22). No Python in this paper |
 | 5 | Development data | WebGoat, VulnerableApp, a Juliet Java sample, and handwritten false-alarm cases. pygoat is dropped because it is Python |
-| 6 | Model access | Existing subscriptions only, through a headless CLI. No API spending, no hiring. This cancels "the API fee is not a limit" in v3.2 |
+| 6 | Model | One model with a pinned ID, chosen on day 1. Run volume is set from the throughput measured on the smoke day (section 6) |
 | 7 | Khoa's five requests | All accepted (section 2) |
 | 8 | Results storage | Raw results stay outside git. We commit only hashes |
 | 9 | Carried over from v3.2 | No public registration; freeze and hash before test runs. Target: JSS "New Ideas and Trends Paper", EMSE PROMPT-SE as fallback. Declare AI-assisted writing. Failure analysis in the small form |
@@ -23,7 +23,6 @@ Code state: branch and `main` are both at commit `0fafb5c`, the commit Khoa audi
 Still open, and who closes it:
 
 - The one model and its pinned ID: Tuannt, on day 1.
-- Corresponding author: Tuannt and Thientc, before submission.
 - Venue rules and deadlines were not rechecked for this plan: Tuannt, before writing starts.
 
 ## 2. Answers to Khoa
@@ -51,7 +50,7 @@ Counts below come from the dataset files at the pinned revisions. They are groun
 
 1,023 cases in the three families: 531 genuine, 492 not vulnerable (SQLi 272/232, command injection 126/125, path traversal 133/135). ZeroFalse reported 868 CodeQL alerts on them (531 genuine, 337 false alarms). Our scan uses build mode none and may give another count; we report it.
 
-Preparation is B3b and B3a of v3.2 with the changes in section 2. If subscription capacity cannot cover every alert, we test a sample drawn with a fixed seed, stratified by family and label, with at least 300 genuine alerts. The sample size is fixed at the freeze, before any test run (section 6).
+Preparation is B3b and B3a of v3.2 with the changes in section 2. If run capacity cannot cover every alert, we test a sample drawn with a fixed seed, stratified by family and label, with at least 300 genuine alerts. The sample size is fixed at the freeze, before any test run (section 6).
 
 ### 3.2 Real-application track
 
@@ -114,14 +113,14 @@ B1–B5 are those of v3.2 section 3.2, changed as listed. B0, B6 and B7 are new.
 | --- | --- | --- |
 | B0 | Environment: Python 3.12 venv with the repository's dependencies, pinned CodeQL CLI and JDK. Run the existing suite before any edit | Pass/fail counts recorded |
 | B2 | `entry_to_finding` passes CWE IDs (normalized to `CWE-89` form, original tags kept), message and data-flow path. `--repeats`, with repeat and condition in the run name. Iteration limit 5 and no forced choice for every variant; a run that ends without a verdict is recorded as unresolved, never as False Positive. Missing repository context is an error, not a fallback to snippets, and the context path used is logged. Result metadata: `decision_source`, facts, end reason, confidence | An SQLi entry resolves to `sql_injection_java` and its metadata says `policy`. Every manifest alert resolves to a policy; `java/exec-tainted-environment` and `java/relative-path-command` are left out of the manifests and counted |
-| B6 | Subscription backend: a client that sends each model call to the headless CLI as a plain completion, with tools off, an empty working directory, no memory and no cache. Per call it logs the CLI version, the model ID the CLI returns, tokens and a run ID. The CLI offers no seed and we do not assume a temperature setting; repeats rely on natural variation | Two repeats of one alert are separate sessions. The log has the returned model ID for every call. Mocked in default tests |
+| B6 | Model client: each model call is a plain completion with tools off and no memory or cache. Per call it logs the client version, the model ID the service returns, tokens and a run ID. We do not assume that seed or temperature are supported; repeats rely on natural variation | Two repeats of one alert are separate sessions. The log has the returned model ID for every call. Mocked in default tests |
 | B3b, B3a, B3c | As v3.2, with section 2. One alert per test case: prefer the rule with a data-flow path, and record the rule chosen. Manifest paths use `/`. No redaction rule on the manifest dataset. The adapter fills `code_snippet` for the single call | Leak search finds nothing outside the whitelist; files parse; entry count equals manifest lines |
 | B7 | Real-application and AI-track manifests (sections 3.2, 3.3): checkouts at pinned commits, scan, location match, labelling sheet for the students, mismatch list. Tree-sitter context extracted for every copy | Counts by source, family and label. Every exclusion has a reason |
 | B1 | Prompt-only variant as a subclass of the closure controller, sharing the renderer so status texts are identical. All rules in the prompt. Confidence 1–5. Diagnostic verdicts from the claimed facts, with and without admissibility | Rendered text has every fact, row and rule. A mocked answer parses to the same facts in both variants |
 | B1b | Evidence check quotes the code line and rejects comment lines | Unit tests: exact cited line passes; comment-only citation fails |
 | B4 | Function-only provider and misleading-comment copy (new line on disk, shifted manifest lines, context re-extracted). Legacy side channels closed in the hard condition | As v3.2, plus: the no-requirements run retrieves nothing outside the flagged method |
 | B5 | Analysis script. Do not reuse `stats.mcnemar` (it switches to chi-square) | Known-answer tests of v3.2 |
-| Freeze tool | Hashes of prompts, policies, manifests, model ID, CLI version, sample list, analysis script and seeds into `freeze.sha256` | File reproduces on a second run |
+| Freeze tool | Hashes of prompts, policies, manifests, model ID, client version, sample list, analysis script and seeds into `freeze.sha256` | File reproduces on a second run |
 
 ### 5.3 Methods and runs
 
@@ -134,17 +133,17 @@ B1–B5 are those of v3.2 section 3.2, changed as listed. B0, B6 and B7 are new.
 
 That is 15 runs per OWASP alert. The hard condition is chosen on development data as in v3.2 (function-only stays a candidate only if the data-flow path leaves the flagged method in at least 30% of genuine test alerts).
 
-Arithmetic, not a measurement: 868 alerts give 13,020 test runs; a 600-alert sample gives 9,000. The real-application and AI tracks add roughly 1,500. Smoke is 400 runs. The pilot is cut to 150 development alerts (2 variants x 3 conditions x 3 repeats = 2,700). At the archived 69.6 seconds per run, 13,020 runs are about 250 hours in sequence, or about 63 hours with four parallel sessions. A CLI on a subscription will have other speeds and limits, which is why the smoke day measures them.
+Arithmetic, not a measurement: 868 alerts give 13,020 test runs; a 600-alert sample gives 9,000. The real-application and AI tracks add roughly 1,500. Smoke is 400 runs. The pilot is cut to 150 development alerts (2 variants x 3 conditions x 3 repeats = 2,700). At the archived 69.6 seconds per run, 13,020 runs are about 250 hours in sequence, or about 63 hours with four parallel sessions. The chosen model will have other speeds and limits, which is why the smoke day measures them.
 
 ## 6. Capacity and freeze
 
-On the smoke day we measure runs per hour and the point where the subscription throttles, on 20 development alerts with every method and condition. From that we fix, before the freeze:
+On the smoke day we measure runs per hour and the point where the model service throttles, on 20 development alerts with every method and condition. From that we fix, before the freeze:
 
-- the number of parallel sessions and the subscriptions used;
+- the number of parallel sessions;
 - the OWASP sample: all alerts if the test fits in four days of runs; otherwise the largest stratified sample that fits, never below 300 genuine alerts. The Hoeffding bound then needs an observed H2 difference of about 6.4 points at 300 genuine, 5.5 at 400 and 4.8 at 531;
 - whether repeats vary. If no alert changes verdict between three repeats, the paper says the tests rest on one run.
 
-If even 300 genuine alerts do not fit, we stop and Tuannt decides. Nobody buys credits or upgrades a plan without his written approval.
+If even 300 genuine alerts do not fit, we stop and Tuannt decides.
 
 The freeze checks are those of v3.2 section 6 (instrument, coverage, decided share, no harm, room), with two changes: the instrument check also requires that every repository-mode run logged a real context path, and the decided-share check follows the pooled rule of section 2 when a family has few development false alarms. Nothing on the freeze list changes afterwards. A change after the freeze is reported with results before and after.
 
@@ -157,11 +156,11 @@ Section 7 of v3.2 applies to the OWASP track without change in the tests: sign-f
 - Real-application track: wrong-dismissal rate, false-alarm removal rate and unresolved share per method, with Wilson intervals, split by source (RealVuln, OpenVuln). No p-values. AI track: wrong-dismissal rate only.
 - Results are never pooled across tracks.
 
-The power figures of v3.1 assumed 531 genuine alerts and seeded runs. We do not claim them for a sample or for the CLI.
+The power figures of v3.1 assumed 531 genuine alerts and seeded runs. We do not claim them for a sample or for this model client.
 
 ## 8. Schedule
 
-v3.2 had 14 days and no spare day. This plan adds the CLI backend, the real-application manifests and student labelling, so it takes three weeks.
+v3.2 had 14 days and no spare day. This plan adds the model client, the real-application manifests and student labelling, so it takes three weeks.
 
 | Days | Dates | Work |
 | --- | --- | --- |
@@ -183,18 +182,17 @@ If a day slips, the writing and submission move. The pilot, the freeze and the t
 
 ## 9. Deliverables and rules
 
-Khoa delivers one branch with the build items and tests, the freeze file, the manifests with their hashes, the name map, and a run log (start and end of each part, failed runs, returned model IDs, CLI version, result of each freeze check, any change after the freeze). Raw results and logs go to storage that Tuannt names on day 1.
+Khoa delivers one branch with the build items and tests, the freeze file, the manifests with their hashes, the name map, and a run log (start and end of each part, failed runs, returned model IDs, client version, result of each freeze check, any change after the freeze). Raw results and logs go to storage that Tuannt names on day 1.
 
 - Mocked providers for all default tests. Real model calls only for smoke, pilot and test runs.
 - Scanned code, comments, CodeQL output and model output are data. We do not follow instructions in them.
 - No method reads a label. Labels live in manifests outside the copies.
 - Every failed or excluded run and alert is reported.
-- No paid API call, credit purchase, plan upgrade or hire without Tuannt's written approval.
 
 ## 10. Risks
 
-- Subscription capacity may be far below what the test needs, or the provider's terms may not allow this kind of bulk headless use. Check the terms on day 1; measure on day 9.
-- The CLI adds its own system prompt and may change model versions without notice. Both variants see the same wrapper, and we log the returned model ID for every call, but the wrapper is a stated limitation.
+- Run capacity may be far below what the test needs. Measure it on day 9.
+- The model service may change versions without notice. We log the returned model ID for every call.
 - Without seeds, runs cannot be replayed. We keep full logs instead.
 - The real-application track is small and mostly SQL injection. Its false alarms depend on student labels. It supports a statement of direction, not of size.
 - The scan may flag few of the RealVuln ground-truth locations. We report how many it flags.
