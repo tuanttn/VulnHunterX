@@ -267,21 +267,24 @@ Trên 20 alert dev, mọi method và điều kiện: đo **số run/giờ** và 
 - [ ] Tạo branch làm việc theo `docs/GIT_WORKFLOW.md` (đang ở `exp-implementation`; chưa commit gì; mở PR tổng ngay ngày 1, không cần chờ Tuannt chốt mục 10)
 
 ### Ngày 2 – Thứ Năm 19/11: OWASP + scan dev
-- [ ] **B3b** – bản copy source-only OWASP dưới `repos/java/<copy name>`:
-  - [ ] Chỉ copy `src/main/java` (bỏ package `report/`); không expectedresults, metadata, git history
-  - [ ] Đổi `BenchmarkTest…` → token ngẫu nhiên; `org.owasp.benchmark` (`helpers`, `testcode`, `service`) → tên trung tính; **giữ `org.owasp.esapi`**
-  - [ ] Đổi `benchmarkprops`, đường dẫn `@WebServlet("/sqli-00/…")`, chuỗi `"Problem executing cmdi - TestCase"`, string constant nhắc benchmark
-  - [ ] **Xóa trắng mọi comment** (kể cả license header), giữ số dòng
-  - [ ] Name map lưu **ngoài** bản copy
-  - [ ] Test: leak search (không phân biệt hoa thường) `owasp`, `benchmark`, các trường nhãn → không có gì ngoài whitelist `org.owasp.esapi`; mọi file parse được
-- [ ] Context tree-sitter cho mỗi bản copy: **đặt SARIF của scan vào `output/java/<copy>/` trước**, rồi chạy `vuln-hunter-x prepare --local-path repos/java/<copy> --name <copy> --lang java --skip-db --backend treesitter` (không có SARIF thì lệnh báo WARN và vẫn exit 0). Đã kiểm chứng ngày 1 trên bản copy thử
-- [ ] **B3a** – scan CodeQL bản copy (build mode none, `java-security-extended`), manifest JSONL ngoài copy. *Chưa thấy alert taint-flow có `codeFlows` ở smoke ngày 1 → kiểm tra ngay ở scan OWASP; tag CWE trong SARIF có dạng `external/cwe/cwe-078`:*
-  - [ ] Lọc 3 họ theo CWE tag (chuẩn hóa `CWE-89`, giữ tag gốc) + rule ID policy chọn; loại và đếm `java/exec-tainted-environment`, `java/relative-path-command`
-  - [ ] 1 alert/test case, đúng họ của nhãn, tại sink line; ưu tiên rule có data-flow path, ghi rule được chọn
-  - [ ] Trường: alert ID, rule ID, CWE IDs, message, file, line, data-flow path (file + line từng bước), label, copy name; path dùng `/`; SHA-256
-  - [ ] Ghi version CodeQL + query pack
-- [ ] Scan dev: Juliet (đã redact trên đĩa, có `testcasesupport/`), WebGoat, VulnerableApp
-- [ ] Đếm: OWASP theo họ × nhãn (so với 868/531/337); **% alert thật có data-flow rời method** (ngưỡng 30%); dev theo nguồn × họ × nhãn (chú ý số false alarm của Juliet)
+> **Tiến độ ngày 2 (cập nhật):** xong phần dữ liệu, chi tiết và hash trong `docs/paper/run_log.md` (mục Day 2). Code ở branch `exp/day2-data-prep` (B3b + B3a + dev gộp một PR), chưa commit. Commit OWASP `a452b3a` đang dùng **tạm**, chờ anh Tuannt. Kết quả chính: manifest OWASP 809 alert (488 thật + 321 false alarm; ZeroFalse 868 = 531 + 337, chênh 59 hoàn toàn do rule `exec-tainted-environment` bị loại); **73.2% alert thật có data-flow rời method** (đạt ngưỡng 30%); dev Juliet họ path chỉ có 36 false alarm (12 case) → nhiều khả năng dùng pooled rule.
+
+- [x] **B3b** – bản copy source-only OWASP dưới `repos/java/<copy name>` (`shopapp-java`, 2763 file):
+  - [x] Chỉ copy `src/main/java` (bỏ package `report/`); không expectedresults, metadata, git history
+  - [x] Đổi `BenchmarkTest…` → token ngẫu nhiên; `org.owasp.benchmark` **và cả ba package con** `helpers`, `testcode`, `service` → tên trung tính (v3.2 B3b có hai cách đọc, chọn cách chặt, chạy lại B3b/B3a, kết quả không đổi); **giữ `org.owasp.esapi`**
+  - [x] Đổi `benchmarkprops`, đường dẫn `@WebServlet("/sqli-00/…")`, chuỗi `"Problem executing cmdi - TestCase"`, string constant nhắc benchmark
+  - [x] **Xóa trắng mọi comment** (kể cả license header), giữ số dòng
+  - [x] Name map lưu **ngoài** bản copy
+  - [x] Test: leak search (không phân biệt hoa thường) `owasp`, `benchmark`, các trường nhãn → không có gì ngoài whitelist `org.owasp.esapi`; mọi file parse được
+- [x] Context tree-sitter cho mỗi bản copy: **đặt SARIF của scan vào `output/java/<copy>/` trước**, rồi chạy `vuln-hunter-x prepare --local-path repos/java/<copy> --name <copy> --lang java --skip-db --backend treesitter` (không có SARIF thì lệnh báo WARN và vẫn exit 0). Xong cho 4 bản copy (OWASP, Juliet, WebGoat, VulnerableApp)
+- [x] **B3a** – scan CodeQL bản copy (build mode none, `java-security-extended`), manifest JSONL ngoài copy. Đã xác nhận có alert taint-flow có `codeFlows` (2680/4163 alert); tag CWE trong SARIF có dạng `external/cwe/cwe-078`:
+  - [x] Lọc 3 họ theo CWE tag (chuẩn hóa `CWE-89`, giữ tag gốc) + rule ID policy chọn (cả 809 alert resolve đúng một policy); loại và đếm `java/exec-tainted-environment` (59), `java/relative-path-command` (0 ở OWASP)
+  - [x] 1 alert/test case, đúng họ của nhãn, tại sink line; ưu tiên rule có data-flow path, ghi rule được chọn
+  - [x] Trường: alert ID, rule ID, CWE IDs, message, file, line, data-flow path (file + line từng bước), label, copy name; path dùng `/`; SHA-256. *Manifest còn trường `source_case` và `label`: B3c không được đưa vào chỗ model đọc*
+  - [x] Ghi version CodeQL (2.27.4) + query pack (`java-queries` 1.12.0, `java-all` 9.3.4)
+- [x] Scan dev: Juliet (đã redact trên đĩa, có `testcasesupport/`), WebGoat, VulnerableApp
+- [x] Đếm: OWASP theo họ × nhãn (488/321, so với 868/531/337); **% alert thật có data-flow rời method = 73.2%** (ngưỡng 30%: đạt); dev theo nguồn × họ × nhãn (Juliet path: 36 false alarm trong 12 case)
+- [ ] Còn lại từ ngày 2: commit code + mở PR `exp/day2-data-prep`; dev manifest và mẫu Juliet (100 case/họ, ≥50 thật) làm ở B3c; nhãn cho alert WebGoat/VulnerableApp không khớp ground truth
 
 ### Ngày 3–4 – Thứ Sáu 20/11 – Thứ Bảy 21/11: B2 + B6 (làm trước, mọi thứ khác phụ thuộc)
 - [ ] **B2:** `entry_to_finding` truyền `cwe_ids` (chuẩn hóa), message, data-flow path
@@ -376,6 +379,8 @@ Trên 20 alert dev, mọi method và điều kiện: đo **số run/giờ** và 
 | 5 | Pin commit OWASP BenchmarkJava (v3.3 không ghi commit; audit dùng `a452b3a`) | Khoa đề xuất, Tuannt xác nhận ngày 1 |
 | 6 | Corresponding author (ghi chú riêng của Khoa; v3.3 đã bỏ ý này ở commit `fdaec4a`) | Nhóm tác giả |
 | 7 | Quy trình delivery và báo cáo ngày (mục 10): mô hình PR 2 tầng, kênh báo cáo, commit run log | **Tuannt chốt ngày 1** |
+| 8 | Chấp nhận **488** alert OWASP thật (thay vì 531 của ZeroFalse): chênh 43 case cmdi thật chỉ bị rule `java/exec-tainted-environment`, rule mà v3.3 §5.2 loại. Vẫn trên ngưỡng 300 alert thật | Khoa báo ngày 2; Tuannt xác nhận |
+| 9 | **Pooled rule** (v3.3 §2: < 20 false alarm dev ở một họ → "Decided share" tính pooled 3 họ): Juliet path có 36 alert nhưng 12 case; chốt khi dựng dev manifest | Khoa chốt ở B3c; Tuannt xác nhận nếu cần |
 
 ---
 
@@ -400,12 +405,11 @@ main                                  ← không đụng tới cho đến cuối
 | Ngày | Item | Branch | Phải merge trước |
 | --- | --- | --- | --- |
 | 1 | Tài liệu (`plan.md`, phần thí nghiệm của `CLAUDE.md`) | `exp/docs-plan` | – |
-| 2 | B3b bản copy OWASP | `exp/b3b-owasp-copy` | – |
-| 2 | B3a scan → manifest | `exp/b3a-owasp-manifest` | B3b |
+| 2 | B3b bản copy OWASP + B3a scan → manifest + dữ liệu dev (Juliet, WebGoat, VulnerableApp) | `exp/day2-data-prep` | – |
 | 3–4 | B2 harness + engine | `exp/b2-harness` | – |
 | 3–4 | B6 model client | `exp/b6-model-client` | – |
-| 5 | B3c manifest adapter | `exp/b3c-manifest-adapter` | B2, B3a |
-| 5 | B7 manifest track phụ | `exp/b7-realapp-manifests` | B3a |
+| 5 | B3c manifest adapter | `exp/b3c-manifest-adapter` | B2, ngày 2 |
+| 5 | B7 manifest track phụ | `exp/b7-realapp-manifests` | ngày 2 |
 | 6–7 | B1b evidence check | `exp/b1b-evidence-check` | B2 |
 | 6–7 | B1 prompt-only | `exp/b1-prompt-only` | B2, B1b |
 | 6–7 | B4 điều kiện khó | `exp/b4-hard-condition` | B2, B3c |
@@ -492,7 +496,7 @@ Không / <mục nào, vì sao>
 | Phase | Ngày | Code lên branch | Báo cáo phải có | Cổng cần Tuannt |
 | --- | --- | --- | --- | --- |
 | **P0 Môi trường** | 1 | Chưa có code; mở PR tổng; tạo run log | Version Python/CodeQL/JDK; baseline pass/fail; revision đã checkout; xác nhận chưa dùng OpenVuln/RealVuln cho tuning | Model + ID pin; nơi lưu kết quả; commit OWASP; quy trình mục 10 |
-| **P1 Dữ liệu** | 2 | PR `exp/b3b-owasp-copy`, PR `exp/b3a-owasp-manifest` (script copy/đổi tên/scan) | Leak search; alert theo họ × nhãn (so với 868/531/337); % data-flow rời method (ngưỡng 30%); dev theo nguồn × họ × nhãn; hash manifest | Dev thiếu false alarm → xác nhận luật gộp 3 họ |
+| **P1 Dữ liệu** | 2 | PR `exp/day2-data-prep` (script copy/đổi tên/scan/đếm; B3b, B3a và dữ liệu dev gộp một PR vì chúng phụ thuộc nhau) | Leak search; alert theo họ × nhãn (so với 868/531/337); % data-flow rời method (ngưỡng 30%); dev theo nguồn × họ × nhãn; hash manifest | Dev thiếu false alarm → xác nhận luật gộp 3 họ |
 | **P2 Core** | 3–4 | PR B2, PR B6 | "Xong khi" từng item; test mới | Temperature (trước ngày 3) |
 | **P3 Manifest** | 5 | PR B3c, PR B7 | Số entry = số dòng manifest; số alert khớp ground truth; danh sách mismatch; sheet đã gửi sinh viên | – |
 | **P4 Biến thể** | 6–7 | PR B1, PR B1b, PR B4 | Unit test B1b; test B4 (no-requirements không retrieve ngoài method) | Phân xử nhãn sinh viên |

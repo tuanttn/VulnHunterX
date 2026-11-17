@@ -28,6 +28,19 @@ List the files changed, behavior delivered, checks actually executed, and unreso
 2. v3.2, v3.1 and the audit are outside this repo, in `../VulnHunterX_newplan/` (`VulnHunterX_plan_v3.2/docs/paper/`, `audit_v3.2_0fafb5c.md`). v3.1 §2 defines every term; v3.2 §6–8 define freeze checks, analysis and failure analysis.
 3. `plan.md` (repo root, Vietnamese) is Khoa's working summary: TODO by day (§7), audit code pointers (§6), open points (§9), delivery and daily reporting (§10). If it disagrees with v3.3, follow v3.3 and point out the mismatch.
 4. Before acting on an open point in `plan.md` §9 (model, temperature, OWASP commit, storage), check whether Tuannt has decided it. If not, ask; do not pick a value silently.
+5. `config.md` (repo root, Vietnamese) is the operational config: every setting with its source and status (✅ settled, ⏳ waiting for Tuannt, 🔧 code still differs and which build item fixes it, 📏 fixed by a measurement, 💡 Khoa's proposal), per-day config (§3), LLM run table (§2) and the config gate (§5). It derives from v3.3; if they disagree, v3.3 wins and the mismatch is reported.
+
+### Config gate (mandatory before every build item and every run)
+
+Before creating an `exp/*` branch, starting a build item, or launching any benchmark run (dry or real), run the gate in `config.md` §5 and report the result in one short block before continuing:
+
+1. Find today's section in `config.md` §3; the planned work must belong to it.
+2. List the ⏳ items the work depends on (`config.md` §4, column "Chặn"). If any is undecided, stop and ask; never fill in a value.
+3. Check that the build items it depends on are merged (`plan.md` §10.1) and their 🔧 rows in `config.md` are updated.
+4. Read the code locations named in `config.md` §1.6–1.7 for every setting the work uses (iterations, forced choice, route, seed/temperature, context fallback, repeats, run dir). If code and config differ and this item is not the one that fixes it, stop and report.
+5. Real model call only on days 9, 10–11 and 13–16 and only when the user asks for that run; otherwise `--dry-run --skip-preflight` and mocks.
+6. After the freeze: if the work touches anything on the freeze list (`config.md` §1.8), stop and tell the user first.
+7. Do not continue to the next build item until the gate passes. A PR that changes a configured value (code default, flag, option name, run naming) must update the matching row of `config.md` in the same PR, and record the gate result in the PR description.
 
 ### Scope guardrails
 
@@ -39,7 +52,7 @@ List the files changed, behavior delivered, checks actually executed, and unreso
 
 ### Fixed experiment configuration
 
-Apply these unless a later decision in `plan.md` or the run log changes them.
+Summary only; the full table with code locations and status is `config.md` §1. Apply these unless a later decision in `plan.md` or the run log changes them.
 
 | Setting | Value |
 | --- | --- |
