@@ -37,6 +37,7 @@ from vuln_hunter_x.context.repo_signals import (
 from vuln_hunter_x.context.snippet_provider import SnippetContextProvider
 from vuln_hunter_x.core.config import Config, load_config
 from vuln_hunter_x.core.types import (
+    CodeContext,
     Finding,
     GuidedQuestions,
     Verdict,
@@ -652,6 +653,8 @@ def _flag_sibling_contradictions(verdicts: list[Verdict]) -> list[Verdict]:
 
 
 _COHERENCE_GATE = "coherence_gate"
+# Repository-mode run without full context CSVs (require_repo_context).
+_CONTEXT_GATE = "context_gate"
 
 # Explicit conclusion assertions only (with a negation guard). This is NOT
 # prose sentiment analysis (#150 retired that): it detects the one incoherent
@@ -1507,6 +1510,79 @@ class VerificationEngine:
             analysis_line=anchor.analysis_line,
         )
 
+    def _effective_context_provider(
+        self, finding: Finding, context_result: CodeContext
+    ) -> ContextProvider | SnippetContextProvider | None:
+        """Return the provider serving this finding's context requests.
+
+        The CSV provider when it has context for the repository, otherwise a
+        snippet provider over the extracted context (source-only fallback).
+        """
+        provider = self.context_provider
+        if isinstance(provider, ContextProvider):
+            if provider.has_context_for_repo(finding.repo_name, finding.lang):
+                logger.info(
+                    "context for %s:%s from %s",
+                    finding.file,
+                    finding.start_line,
+                    provider.context_dir_for(finding.repo_name, finding.lang),
+                )
+                return provider
+            logger.info(
+                "no context CSVs for %s/%s; using snippet context for %s:%s",
+                finding.lang,
+                finding.repo_name,
+                finding.file,
+                finding.start_line,
+            )
+            return SnippetContextProvider(
+                snippet=context_result.code,
+                function_name=context_result.function_name,
+            )
+        return provider
+
+    def _missing_required_context(self, finding: Finding) -> tuple[Path, list[str]] | None:
+        """With ``require_repo_context`` on, return (context dir, missing CSVs)
+        when the repository lacks full context; otherwise None."""
+        if not getattr(self.config.verification, "require_repo_context", False):
+            return None
+        provider = self.context_provider
+        if not isinstance(provider, ContextProvider):
+            return None
+        missing = provider.missing_context_files(finding.repo_name, finding.lang)
+        if not missing:
+            return None
+        return provider.context_dir_for(finding.repo_name, finding.lang), missing
+
+    def _context_gate_verdict(
+        self, finding: Finding, missing_context: tuple[Path, list[str]]
+    ) -> Verdict:
+        """Error verdict for a repository-mode run without full context.
+
+        Never a dismissal and never a snippet fallback: the run is reported as
+        failed so it can be retried or excluded and counted."""
+        context_dir, missing = missing_context
+        logger.error(
+            "required context missing for %s:%s: %s (missing %s)",
+            finding.file,
+            finding.start_line,
+            context_dir,
+            ", ".join(missing),
+        )
+        return Verdict(
+            finding=finding,
+            verdict=VerdictType.ERROR.value,
+            confidence="",
+            reasoning=(
+                f"Required repository context missing: {context_dir} "
+                f"(missing {', '.join(missing)}); no snippet fallback."
+            ),
+            answers=[],
+            raw_response="",
+            model=self.config.llm.model,
+            decision_source=_CONTEXT_GATE,
+        )
+
     def _verify_legacy_finding(self, finding: Finding) -> Verdict:
         """Verify a single finding (legacy model-verdict path)."""
         # Get questions (pass CWE IDs for Semgrep/OpenGrep CWE-based matching)
@@ -1538,15 +1614,12 @@ class VerificationEngine:
         # benchmark snippet), fall back to a SnippetContextProvider so the
         # multi-turn loop still has *something* to serve. Returning empty
         # was the documented cause of the 2026-05-15 benchmark's 73% TP-loss
-        # — the LLM defaulted to FP rather than asking for context.
-        effective_provider: ContextProvider | SnippetContextProvider | None = self.context_provider
-        if isinstance(self.context_provider, ContextProvider) and not (
-            self.context_provider.has_context_for_repo(finding.repo_name, finding.lang)
-        ):
-            effective_provider = SnippetContextProvider(
-                snippet=context_result.code,
-                function_name=context_result.function_name,
-            )
+        # — the LLM defaulted to FP rather than asking for context. With
+        # ``verification.require_repo_context`` the fallback is an Error instead.
+        missing_context = self._missing_required_context(finding)
+        if missing_context is not None:
+            return self._context_gate_verdict(finding, missing_context)
+        effective_provider = self._effective_context_provider(finding, context_result)
 
         # Pre-fetch additional context declared by guided questions
         prefetched_context: dict[str, str] = {}
@@ -1861,14 +1934,10 @@ class VerificationEngine:
             finding.lang,
             repo_name=finding.repo_name,
         )
-        effective_provider: ContextProvider | SnippetContextProvider | None = self.context_provider
-        if isinstance(self.context_provider, ContextProvider) and not (
-            self.context_provider.has_context_for_repo(finding.repo_name, finding.lang)
-        ):
-            effective_provider = SnippetContextProvider(
-                snippet=context_result.code,
-                function_name=context_result.function_name,
-            )
+        missing_context = self._missing_required_context(finding)
+        if missing_context is not None:
+            return self._context_gate_verdict(finding, missing_context)
+        effective_provider = self._effective_context_provider(finding, context_result)
 
         sc_samples = getattr(self.config.verification, "self_consistency_samples", 1) or 1
         if sc_samples > 1:

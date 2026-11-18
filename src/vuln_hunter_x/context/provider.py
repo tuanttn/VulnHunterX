@@ -35,6 +35,10 @@ from vuln_hunter_x.context.repo_paths import resolve_repo_file, resolve_repo_roo
 
 logger = logging.getLogger(__name__)
 
+# Context CSVs written by ``prepare`` (CodeQL or tree-sitter backend) that a
+# repository-mode verification needs in full.
+REQUIRED_CONTEXT_FILES: tuple[str, ...] = ("functions.csv", "callers.csv", "classes.csv")
+
 
 def _safe_repo_rel(path: str) -> str | None:
     """Normalize a repo-relative path, rejecting escapes; no existence check.
@@ -366,6 +370,20 @@ class ContextProvider:
         """Check if context CSV files exist for a repository."""
         repo_context_dir = self._context_dir(lang, repo_name)
         return repo_context_dir.is_dir()
+
+    def context_dir_for(self, repo_name: str, lang: str) -> Path:
+        """Return the context directory this provider reads for a repository."""
+        return self._context_dir(lang, repo_name)
+
+    def missing_context_files(self, repo_name: str, lang: str) -> list[str]:
+        """Return the required context CSV names absent for a repository.
+
+        ``has_context_for_repo`` only checks that the directory exists; callers
+        that must not run without full repository context use this stricter
+        check (every file in ``REQUIRED_CONTEXT_FILES`` present).
+        """
+        repo_context_dir = self._context_dir(lang, repo_name)
+        return [name for name in REQUIRED_CONTEXT_FILES if not (repo_context_dir / name).is_file()]
 
     def _load_csv(self, repo_name: str, lang: str, csv_name: str) -> list[dict]:
         """Load a CSV file from the context directory."""

@@ -58,7 +58,7 @@ class LLMConfig:
 
     provider: str = DEFAULT_LLM_PROVIDER
     model: str = DEFAULT_LLM_MODEL
-    temperature: float = DEFAULT_LLM_TEMPERATURE
+    temperature: float | None = DEFAULT_LLM_TEMPERATURE
     # #150: fixed sampling seed for run-to-run reproducibility. ``null`` in
     # YAML disables seeding and restores provider entropy.
     seed: int | None = DEFAULT_LLM_SEED
@@ -97,6 +97,11 @@ class VerificationConfig:
 
     max_iterations: int = DEFAULT_MAX_ITERATIONS
     force_decision: bool = True
+    # When True, a finding whose repository has no complete context CSVs
+    # (functions/callers/classes) gets an Error verdict instead of the silent
+    # snippet-provider fallback. Off by default so the CLI keeps its
+    # source-only fallback; repository-mode benchmark runs turn it on.
+    require_repo_context: bool = False
     # Self-consistency voting (CISC, ACL 2025): when > 1, run N independent
     # analyses at ``self_consistency_temperature`` and take confidence-
     # weighted majority vote. ``self_consistency_tie_break`` is "fp" (the
@@ -209,6 +214,7 @@ class Config:
         verification = VerificationConfig(
             max_iterations=data.get("max_iterations", DEFAULT_MAX_ITERATIONS),
             force_decision=data.get("force_decision", True),
+            require_repo_context=bool(data.get("require_repo_context", False)),
             self_consistency_samples=int(data.get("self_consistency_samples", 1)),
             self_consistency_temperature=float(data.get("self_consistency_temperature", 0.7)),
             self_consistency_tie_break=str(data.get("self_consistency_tie_break", "fp")),

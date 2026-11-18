@@ -42,9 +42,11 @@ import argparse
 import json
 import logging
 import os
+import re
 import sys
 import threading
 import time
+import uuid
 import warnings
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import UTC, date, datetime
@@ -521,6 +523,10 @@ def _log_finding(findings_log: Path, entry: GroundTruthEntry, result: BenchmarkR
         "cost_usd": result.cost_usd,
         "elapsed_s": round(result.elapsed_seconds, 2),
     }
+    meta = result.result_metadata or {}
+    for key in ("run_id", "repeat", "condition", "route", "decision_source", "end_reason"):
+        if key in meta:
+            record[key] = meta[key]
     with open(findings_log, "a", encoding="utf-8") as f:
         f.write(json.dumps(record) + "\n")
 
@@ -599,7 +605,7 @@ def _validate_entries(name: str, entries: list[GroundTruthEntry]) -> None:
         )
 
 
-def _llm_preflight(provider: str, model: str) -> None:
+def _llm_preflight(provider: str, model: str, call_log: Path | None = None) -> None:
     """Burn one ~4-token completion to fail fast on auth / quota / network
     issues. Cheaper than discovering them after 800+ failed entries.
 
@@ -609,6 +615,7 @@ def _llm_preflight(provider: str, model: str) -> None:
     LLMClient adds automatically).
     """
     from vuln_hunter_x.core.config import _load_ollama_api_keys
+    from vuln_hunter_x.llm.call_log import shared_call_log
     from vuln_hunter_x.llm.client import LLMClient
 
     try:
@@ -618,6 +625,9 @@ def _llm_preflight(provider: str, model: str) -> None:
             temperature=0.0,
             max_tokens=4,
             ollama_api_keys=_load_ollama_api_keys(),
+            # The preflight is a real model call: record its returned model ID too.
+            call_logger=shared_call_log(call_log) if call_log else None,
+            call_context={"phase": "preflight"},
         )
         kwargs = client._build_completion_kwargs(
             [{"role": "user", "content": "ok"}],
@@ -634,6 +644,190 @@ def _llm_preflight(provider: str, model: str) -> None:
 
 
 # ── Main runner ───────────────────────────────────────────────────────────────
+
+_CONDITION_RE = re.compile(r"^[a-z0-9][a-z0-9-]*$")
+
+
+def _attach_run_labels(
+    result: BenchmarkResult, labels: dict[str, Any] | None
+) -> BenchmarkResult:
+    """Record the repeat/condition labels and a run ID on a result.
+
+    Values the approach already wrote win (e.g. its own ``run_id``). Results of
+    a run without labels (no ``--repeats``/``--condition``) are left unchanged.
+    """
+    if not labels:
+        return result
+    meta = dict(result.result_metadata or {})
+    for key, value in labels.items():
+        meta.setdefault(key, value)
+    meta.setdefault("run_id", uuid.uuid4().hex)
+    result.result_metadata = meta
+    return result
+
+
+def _model_client_info() -> dict[str, Any]:
+    """Model client version and settings that apply to every call of the run."""
+    import litellm
+
+    from vuln_hunter_x.llm.call_log import litellm_version
+
+    return {
+        "client": "litellm",
+        "client_version": litellm_version(),
+        "drop_params": bool(getattr(litellm, "drop_params", False)),
+        "litellm_cache_enabled": getattr(litellm, "cache", None) is not None,
+    }
+
+
+def _seed_option_problems(
+    approaches: list[str], options: dict[str, str]
+) -> tuple[list[str], list[str]]:
+    """Check the ``seed`` option of every approach that declares one.
+
+    Returns ``(missing, fixed)``: approaches whose seed is unset or ``default``
+    (the client would send its built-in seed 42), and approaches given a fixed
+    number. Experiment runs must say ``seed=none`` (v3.3: no reliance on seed).
+    """
+    from benchmarks.approaches.registry import get_approach
+
+    missing: list[str] = []
+    fixed: list[str] = []
+    for name in approaches:
+        try:
+            schema = get_approach(name).option_schema
+        except KeyError:
+            continue
+        if "seed" not in schema:
+            continue
+        value = str(options.get("seed", "default")).strip().lower()
+        if value in ("", "default"):
+            missing.append(name)
+        elif value != "none":
+            fixed.append(name)
+    return missing, fixed
+
+
+_EXPERIMENT_MAX_ITERATIONS = "5"
+
+
+def _experiment_config_problems(
+    approaches: list[str],
+    options: dict[str, str],
+    *,
+    model_explicit: bool,
+    provider_explicit: bool,
+    force_decision_flag: bool,
+    nmd_handling: str,
+) -> tuple[list[str], list[str]]:
+    """Check an experiment run (``--repeats``/``--condition``, real model) against
+    the fixed configuration of plan v3.3 / ``config.md``.
+
+    Every item below has a harness default that is wrong for the experiment, so
+    leaving the option out would silently change the run. Returns
+    ``(errors, warnings)``: an error stops the run, a warning is logged.
+    """
+    from benchmarks.adapters.registry import _to_bool
+    from benchmarks.approaches.registry import get_approach
+
+    errors: list[str] = []
+    warnings_: list[str] = []
+    if not model_explicit:
+        errors.append(
+            "no model chosen: pass --model (or set LLM_MODEL); the harness would use its "
+            "built-in gpt-4.1, and the model ID is a decision of the study (plan §9 #1)"
+        )
+    if not provider_explicit:
+        errors.append("no provider chosen: pass --provider (or set LLM_PROVIDER)")
+    if nmd_handling != "exclude":
+        errors.append(
+            f"--nmd-handling {nmd_handling} counts Needs-More-Data as False Positive; "
+            "an unresolved run must never be scored as a dismissal (use exclude)"
+        )
+
+    missing_seed, fixed_seed = _seed_option_problems(approaches, options)
+    if missing_seed:
+        errors.append(
+            "seed is not set for " + ", ".join(missing_seed) + ": the client would send "
+            "its built-in seed 42; pass --approach-option seed=none"
+        )
+    warnings_ += [
+        f"approach {name} runs with a fixed seed; v3.3 does not rely on a seed"
+        for name in fixed_seed
+    ]
+
+    wants_force_flag = False
+    for name in approaches:
+        try:
+            schema = get_approach(name).option_schema
+        except KeyError:
+            continue
+        if "max_iterations" in schema:
+            value = options.get("max_iterations")
+            if value is None:
+                errors.append(
+                    f"{name}: max_iterations is not set; the harness would use its "
+                    f"default of 10 (pass --approach-option max_iterations="
+                    f"{_EXPERIMENT_MAX_ITERATIONS})"
+                )
+            elif value.strip() != _EXPERIMENT_MAX_ITERATIONS:
+                warnings_.append(
+                    f"{name}: max_iterations={value}, the plan fixes "
+                    f"{_EXPERIMENT_MAX_ITERATIONS}"
+                )
+        if "force_decision" in schema:
+            wants_force_flag = True
+            value = options.get("force_decision")
+            try:
+                forced = True if value is None else _to_bool(value)
+            except ValueError:
+                forced = True
+            if forced:
+                errors.append(
+                    f"{name}: forced choice is on (option force_decision "
+                    f"{'missing' if value is None else value}); a run without a verdict must "
+                    "stay unresolved (pass --approach-option force_decision=false)"
+                )
+        if "temperature" in schema:
+            # The value is a decision of the study (plan §9 #4, config.md §1.6), so
+            # the harness only insists that the run states one: ``none`` (send
+            # nothing, the service decides) or a number. ``default`` / absent would
+            # silently send the client's built-in 0.0.
+            raw_temperature = options.get("temperature", "default").strip().lower()
+            if raw_temperature in ("", "default"):
+                errors.append(
+                    f"{name}: temperature is not set; the client would send its built-in "
+                    "0.0. State the study's choice with --approach-option temperature=none "
+                    "(not sent) or temperature=<number>"
+                )
+            elif raw_temperature != "none":
+                try:
+                    float(raw_temperature)
+                except ValueError:
+                    errors.append(
+                        f"{name}: temperature={raw_temperature!r} is neither 'none' nor a number"
+                    )
+        if "require_context" in schema:
+            try:
+                needed = _to_bool(options.get("require_context", "true"))
+            except ValueError:
+                needed = True
+            if not needed:
+                errors.append(
+                    f"{name}: require_context=false allows the snippet fallback; missing "
+                    "context must be an error"
+                )
+    if wants_force_flag and force_decision_flag:
+        errors.append("pass --no-force-decision as well (the run record keeps the flag)")
+    return errors, warnings_
+
+
+def _repeat_suffix(route: str | None, condition: str, repeat: int) -> str:
+    """Name part of one repeat: ``_<route>_<condition>_r<k>`` (route if the approach has one)."""
+    parts = [route] if route else []
+    parts += [condition, f"r{repeat}"]
+    return "_" + "_".join(parts)
+
 
 def run_one(
     dataset_name: str,
@@ -787,21 +981,23 @@ def run_one(
         # it stays visible in benchmark.log, and let the run continue.
         try:
             if llm_gate is None:
-                return approach.evaluate(entry)
-            with llm_gate:
-                return approach.evaluate(entry)
+                result = approach.evaluate(entry)
+            else:
+                with llm_gate:
+                    result = approach.evaluate(entry)
         except Exception as exc:  # noqa: BLE001 — isolate one bad entry
             logger.exception(
                 "approach %s crashed on entry %s — recording ERROR",
                 approach_name, entry.id,
             )
-            return BenchmarkResult(
+            result = BenchmarkResult(
                 entry=entry,
                 predicted_label=PRED_ERROR,
                 confidence="",
                 reasoning=f"approach.evaluate raised {type(exc).__name__}: {exc}",
                 elapsed_seconds=0.0,
             )
+        return _attach_run_labels(result, getattr(approach, "run_labels", None))
 
     def _completed_results() -> list[BenchmarkResult]:
         return [r for r in slots if r is not None]
@@ -964,8 +1160,12 @@ def main() -> int:
             "(the guided-question ablation; specific arm = vulnhunterx, not re-run)."
         ),
     )
-    parser.add_argument("--model", default=os.environ.get("LLM_MODEL", "gpt-4.1"))
-    parser.add_argument("--provider", default=os.environ.get("LLM_PROVIDER", "openai"))
+    # Defaults are resolved after parsing so an experiment run can tell a chosen
+    # model from the built-in fallback (see _experiment_config_problems).
+    parser.add_argument("--model", default=None, help="Model ID (default: $LLM_MODEL or gpt-4.1)")
+    parser.add_argument(
+        "--provider", default=None, help="Provider (default: $LLM_PROVIDER or openai)"
+    )
     parser.add_argument("--limit", type=int, default=0, help="Cap entries per dataset (0=all)")
     parser.add_argument(
         "--lang",
@@ -1171,6 +1371,29 @@ def main() -> int:
              "Resolves to benchmarks/results/<run-id>.",
     )
     parser.add_argument(
+        "--repeats",
+        type=int,
+        default=None,
+        metavar="N",
+        help=(
+            "Run every (dataset, approach) pair N times as separate runs. Each "
+            "repeat gets its own checkpoint "
+            "<dataset>_<approach>[_<route>]_<condition>_r<k>_results.json and a "
+            "fresh approach (no state shared between repeats). Default: one run "
+            "with the historic file name."
+        ),
+    )
+    parser.add_argument(
+        "--condition",
+        default=None,
+        metavar="LABEL",
+        help=(
+            "Condition label recorded in results and file names (lower case, "
+            "digits and '-', e.g. full). Turns on the repeat naming; defaults to "
+            "'full' when --repeats is given."
+        ),
+    )
+    parser.add_argument(
         "--checkpoint-every",
         type=int,
         default=1,
@@ -1225,6 +1448,21 @@ def main() -> int:
     )
     args = parser.parse_args()
 
+    model_explicit = args.model is not None or "LLM_MODEL" in os.environ
+    provider_explicit = args.provider is not None or "LLM_PROVIDER" in os.environ
+    args.model = args.model or os.environ.get("LLM_MODEL", "gpt-4.1")
+    args.provider = args.provider or os.environ.get("LLM_PROVIDER", "openai")
+
+    if args.repeats is not None and args.repeats < 1:
+        parser.error("--repeats must be >= 1")
+    if args.condition is not None and not _CONDITION_RE.match(args.condition):
+        parser.error("--condition must match [a-z0-9][a-z0-9-]*")
+    repeat_naming = args.repeats is not None or args.condition is not None
+    if repeat_naming and args.iteration_sweep:
+        parser.error("--repeats/--condition cannot be combined with --iteration-sweep")
+    repeats = args.repeats or 1
+    condition = args.condition or "full"
+
     # Determine datasets and approaches via the registries.
     # ``all`` expands to every registered adapter. A family tag (e.g.
     # ``owasp``) expands to every adapter whose ``family`` attribute
@@ -1263,6 +1501,26 @@ def main() -> int:
 
     if args.iteration_sweep:
         approaches = ["vulnhunterx"]
+
+    # Experiment runs (--repeats/--condition) with a real model must not rely on a
+    # harness default that differs from the fixed configuration: model, provider,
+    # seed, iteration limit, forced choice, context requirement, NMD scoring.
+    if repeat_naming and not args.dry_run:
+        errors, config_warnings = _experiment_config_problems(
+            approaches,
+            _parse_kv_options(args.approach_option),
+            model_explicit=model_explicit,
+            provider_explicit=provider_explicit,
+            force_decision_flag=args.force_decision,
+            nmd_handling=args.nmd_handling,
+        )
+        if errors:
+            parser.error(
+                "experiment run is not fully configured:\n  - " + "\n  - ".join(errors)
+                + "\n(or use --dry-run)"
+            )
+        for message in config_warnings:
+            logger.warning(message)
 
     # Resolve run directory (Phase 1)
     if args.run_dir is not None:
@@ -1340,7 +1598,21 @@ def main() -> int:
         "redact": not args.no_redact,
         "cutoff_after": args.cutoff_after,
         "cutoff_before": args.cutoff_before,
+        "approach_options": _parse_kv_options(args.approach_option),
+        "force_decision": args.force_decision,
     }
+    if repeat_naming:
+        current_config["repeats"] = repeats
+        current_config["condition"] = condition
+    current_config["model_client"] = _model_client_info()
+    if current_config["model_client"]["litellm_cache_enabled"] and not args.dry_run:
+        # v3.3: no cache between repeats. A litellm cache would answer a repeat
+        # from an earlier run, so refuse to start rather than log it.
+        print(
+            "error: litellm.cache is enabled; repeats must be separate model calls.",
+            file=sys.stderr,
+        )
+        return 2
     _save_run_config(run_dir, current_config)
     if args.resume:
         _check_run_config_drift(run_dir, current_config)
@@ -1371,7 +1643,7 @@ def main() -> int:
         and not args.skip_preflight
         and any(a != "raw-sast" for a in approaches)
     ):
-        _llm_preflight(args.provider, args.model)
+        _llm_preflight(args.provider, args.model, run_dir / "llm_calls_preflight.jsonl")
 
     # Statistical-noise guard: rebalancing diversevul to a fixed positive/
     # negative fraction with a small --limit produces per-CWE F1 numbers
@@ -1497,63 +1769,90 @@ def main() -> int:
             # fp_reduction_rate and tp_preservation_rate relative to raw-sast.
             dataset_runs: list[tuple[str, ApproachMetrics, list[BenchmarkResult]]] = []
 
-            for approach_name in approaches:
-                for max_iters in iteration_values:
-                    effective_name = (
-                        f"{approach_name}_iter{max_iters}"
-                        if args.iteration_sweep
-                        else approach_name
+            run_plan = [
+                (approach_name, max_iters, repeat)
+                for approach_name in approaches
+                for max_iters in iteration_values
+                for repeat in range(1, repeats + 1)
+            ]
+            for approach_name, max_iters, repeat in run_plan:
+                effective_name = (
+                    f"{approach_name}_iter{max_iters}"
+                    if args.iteration_sweep
+                    else approach_name
+                )
+                approach_options = dict(user_approach_options)
+                # Deprecation shims: the historic CLI flags still set
+                # these options unless the user passed them explicitly
+                # via --approach-option. We only propagate options the
+                # chosen approach actually declares — otherwise raw-sast
+                # (which has an empty option_schema) would spam warnings
+                # for every default flag value.
+                from benchmarks.approaches.registry import get_approach
+                schema = get_approach(approach_name).option_schema
+                if "max_iterations" in schema:
+                    approach_options.setdefault("max_iterations", max_iters)
+                if (
+                    "force_decision" in schema
+                    and "force_decision" not in approach_options
+                ):
+                    approach_options["force_decision"] = args.force_decision
+                if (
+                    "use_slicing" in schema
+                    and args.sliced_context
+                    and "use_slicing" not in approach_options
+                ):
+                    approach_options["use_slicing"] = True
+                if repeat_naming:
+                    route = approach_options.get("route") if "route" in schema else None
+                    if "route" in schema and route is None:
+                        route = schema["route"].default
+                    effective_name += _repeat_suffix(route, condition, repeat)
+                # One JSONL record per model call, next to the checkpoint
+                # (B6). Off for dry runs, which make no call.
+                if (
+                    "call_log" in schema
+                    and "call_log" not in approach_options
+                    and not args.dry_run
+                ):
+                    approach_options["call_log"] = str(
+                        run_dir / f"llm_calls_{dataset_name}_{effective_name}.jsonl"
                     )
-                    approach_options = dict(user_approach_options)
-                    # Deprecation shims: the historic CLI flags still set
-                    # these options unless the user passed them explicitly
-                    # via --approach-option. We only propagate options the
-                    # chosen approach actually declares — otherwise raw-sast
-                    # (which has an empty option_schema) would spam warnings
-                    # for every default flag value.
-                    from benchmarks.approaches.registry import get_approach
-                    schema = get_approach(approach_name).option_schema
-                    if "max_iterations" in schema:
-                        approach_options.setdefault("max_iterations", max_iters)
-                    if (
-                        "force_decision" in schema
-                        and "force_decision" not in approach_options
-                    ):
-                        approach_options["force_decision"] = args.force_decision
-                    if (
-                        "use_slicing" in schema
-                        and args.sliced_context
-                        and "use_slicing" not in approach_options
-                    ):
-                        approach_options["use_slicing"] = True
-                    approach = _build_approach(
-                        approach_name,
-                        args.model,
-                        args.provider,
-                        args.dry_run,
-                        options=approach_options,
-                    )
-                    approach.name = effective_name
+                approach = _build_approach(
+                    approach_name,
+                    args.model,
+                    args.provider,
+                    args.dry_run,
+                    options=approach_options,
+                )
+                if repeat_naming:
+                    approach.run_labels = {
+                        "repeat": repeat,
+                        "condition": condition,
+                        "repeat_of": repeats,
+                        "batch_id": uuid.uuid4().hex,
+                    }
+                approach.name = effective_name
 
-                    result = run_one(
-                        dataset_name,
-                        effective_name,
-                        entries,
-                        approach,
-                        run_dir,
-                        args.nmd_handling,
-                        args.resume,
-                        checkpoint_every=args.checkpoint_every,
-                        verbose=args.verbose,
-                        quiet=args.quiet,
-                        jobs=args.jobs,
-                        llm_concurrency=args.llm_concurrency,
-                        only_entries=only_entries_set,
-                        model=args.model,
-                    )
-                    if result is not None:
-                        metrics, results = result
-                        dataset_runs.append((effective_name, metrics, results))
+                result = run_one(
+                    dataset_name,
+                    effective_name,
+                    entries,
+                    approach,
+                    run_dir,
+                    args.nmd_handling,
+                    args.resume,
+                    checkpoint_every=args.checkpoint_every,
+                    verbose=args.verbose,
+                    quiet=args.quiet,
+                    jobs=args.jobs,
+                    llm_concurrency=args.llm_concurrency,
+                    only_entries=only_entries_set,
+                    model=args.model,
+                )
+                if result is not None:
+                    metrics, results = result
+                    dataset_runs.append((effective_name, metrics, results))
 
             # Find raw-sast baseline counts for this dataset
             raw_sast_tp: int | None = None
