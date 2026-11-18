@@ -13,6 +13,7 @@
 | 🔧 | Code hiện tại **khác** config yêu cầu; build item ghi bên cạnh sẽ sửa |
 | 📏 | Chốt bằng số đo (smoke ngày 9, pilot ngày 10–11) **trước freeze** |
 | 💡 | Đề xuất của Khoa, không có trong v3.3 |
+| 🧪 | Đã code + test (mock) trong working tree, **chưa merge**; đổi thành ✅ khi PR của item merge |
 
 ---
 
@@ -56,8 +57,8 @@
 | Enforced | `vulnhunterx-repo` | `route=auto` | ✅ |
 | Prompt-only | `vulnhunterx-repo` | `route=prompt_only` (**chưa có**: `repo_context.py:102` chỉ nhận `auto`/`legacy`) | 🔧 B1 |
 | No-requirements | `vulnhunterx-repo` | `route=legacy`; ở điều kiện khó phải chặn prefetch, repo signals, reachability | 🔧 B4 |
-| Single call | `single-shot-cwe` | không có option; cần `code_snippet` từ manifest adapter | 🔧 B3c |
-| Mọi biến thể VulnHunterX | — | `max_iterations=5`, `force_decision=false`, không verdict → **unresolved** (không bao giờ là False Positive) | 🔧 B2 |
+| Single call | `single-shot-cwe` | option `seed=none`, `temperature`, `call_log` giống `vulnhunterx-repo` (🧪 B6: mỗi entry 1 client mới, log call, model ID trả về trong `result_metadata`); cần `code_snippet` từ manifest adapter (🔧 B3c) | 🔧 B3c · 🧪 B6 |
+| Mọi biến thể VulnHunterX | — | `max_iterations=5`, `force_decision=false`, `require_context=true` (mặc định), `seed=none`; không verdict → **unresolved** (không bao giờ là False Positive). Policy path đã cứng `force_decision=False` (`engine.py`, `_run_policy_sample`); legacy hết iteration → `Needs More Data` → `NMD`. Chỉ dùng `--nmd-handling exclude` (mặc định); `fp` đổi NMD thành FP (`metrics/evaluator.py:667`) | 🧪 B2 |
 
 ### 1.5 Điều kiện
 | Điều kiện | Mô tả | TT |
@@ -72,12 +73,12 @@ Tên option chọn điều kiện do B4 đặt; ghi vào đây khi PR B4 merge.
 ### 1.6 Model client (B6)
 | Mục | Yêu cầu | Code hiện tại (`0fafb5c`) | TT |
 | --- | --- | --- | --- |
-| Model + ID pin | 1 model, ID pin | mặc định `gpt-4.1` (`run_benchmark.py:967`, đọc `LLM_MODEL`) | ⏳ Tuannt |
+| Model + ID pin | 1 model, ID pin | harness mặc định `gpt-4.1` / provider `openai` (đọc `LLM_MODEL`, `LLM_PROVIDER`). Run thí nghiệm (xem "Cổng cấu hình" ở §1.7) **bị từ chối** nếu không truyền `--model` và `--provider` (hoặc đặt biến môi trường) | ⏳ Tuannt (giá trị); 🧪 B2 (chặn mặc định) |
 | Provider + API key | key trong `.env` (git-ignored) hoặc shell, không bao giờ trong code/log/commit | `.env` được nạp ở `run_benchmark.py:64`; tên biến theo provider (`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `DEEPSEEK_API_KEY`, `GEMINI_API_KEY(S)`) | ⏳ Tuannt |
-| Kiểu call | completion thuần, tắt tools, không memory/cache, mỗi repeat là session riêng | cần kiểm tra trong B6 | 🔧 B6 |
-| Log mỗi call | client version, **model ID trả về** (`response.model`), tokens, run ID → JSONL | chưa đọc `response.model` | 🔧 B6 |
-| Seed | **không dựa vào seed** | gửi seed 42 mọi call (`core/constants.py:25`, `llm/client.py:287-292`) | 🔧 B6 |
-| Temperature | v3.3: không giả định được hỗ trợ. Giá trị cụ thể **chưa chốt** | 0.0 (`constants.py:22`); `litellm.drop_params=True` (`client.py:36`) có thể âm thầm bỏ tham số | ⏳ Tuannt (plan.md §9 #4), trước ngày 3 |
+| Kiểu call | completion thuần, tắt tools, không memory/cache, mỗi repeat là session riêng | không gửi `tools`/`tool_choice`/`caching` (test); mỗi alert 1 engine + 1 `LLMClient` mới (`repo_context.py` `_build_engine`), run ID riêng; `litellm.cache` ghi vào log + `run_config.json` | 🧪 B6 |
+| Log mỗi call | client version, **model ID trả về** (`response.model`), tokens, run ID → JSONL | cả `vulnhunterx-repo` lẫn `single-shot-cwe` và call preflight (`llm_calls_preflight.jsonl`). `llm/call_log.py` + `LLMClient._completion`: 1 dòng/call (run ID, entry ID, repeat, condition, route, model yêu cầu + trả về, litellm version, tokens gồm `cached_input_tokens`, latency, finish_reason, tham số đã gửi). Không ghi prompt/response; lỗi chỉ ghi loại + status. Harness tự đặt `<run_dir>/llm_calls_<dataset>_<tên run>.jsonl` (trừ dry-run); `models_returned` vào result metadata. Một dòng = một lần `litellm.completion` của client; retry nội bộ của litellm (`num_retries`) không thấy được. Harness từ chối chạy thật nếu `litellm.cache` bật | 🧪 B6 |
+| Seed | **không dựa vào seed** | option `seed=none` của `vulnhunterx-repo` → không gửi seed. Mặc định client/CLI vẫn 42 (`core/constants.py:25`, giữ cho người dùng khác) → lệnh thí nghiệm (có `--repeats`/`--condition`, không `--dry-run`) **bị harness từ chối (exit 2)** nếu không truyền `--approach-option seed=none`; seed số cố định chỉ được phép kèm cảnh báo | 🧪 B6 |
+| Temperature | v3.3: không giả định được hỗ trợ. Giá trị cụ thể **chưa chốt** | B6 thêm option `temperature` nhận `default` / `none` / một số (`none` = không gửi, service tự chọn); mặc định vẫn 0.0 (`constants.py:22`). `litellm.drop_params=True` (`client.py:36`) có thể âm thầm bỏ tham số: log ghi tham số **đã gửi** (`params_sent`) và tham số đã gửi nhưng không có trong danh sách hỗ trợ của litellm cho model đó (`params_outside_litellm_supported_list`; `null` = litellm không biết model). Danh sách là bảng tĩnh của litellm: bằng chứng nên có drop, không phải bằng chứng provider đã nhận gì | ⏳ Tuannt (plan.md §9 #4) – không chặn code hay merge (B6 chỉ thêm tham số); chặn **chạy model thật** (harness từ chối run thí nghiệm không nêu temperature) và freeze |
 | Tham số khác | ghi vào run log | `max_tokens` 4096, retry khi cắt cụt 8192 (`constants.py:32,36`), `request_timeout` 180 s | 💡 ghi run log; đưa vào freeze nếu Tuannt đồng ý |
 | Prompt cache phía provider | v3.3 yêu cầu "no cache" | client đã đọc `cached_tokens` (`client.py:79-103`); một số provider tự cache prefix, không tắt được từ client | 💡 B6 log `cached_tokens` mỗi call; báo Tuannt nếu khác 0 |
 | Test mặc định | mock provider | — | ✅ |
@@ -85,9 +86,12 @@ Tên option chọn điều kiện do B4 đặt; ghi vào đây khi PR B4 merge.
 ### 1.7 Chạy harness (`benchmarks/scripts/run_benchmark.py`)
 | Flag | Giá trị thí nghiệm | Mặc định code | TT |
 | --- | --- | --- | --- |
-| `--approach-option max_iterations=5` | 5 cho mọi biến thể | harness 10 (`benchmark.yaml`), approach 3 (`repo_context.py:63`) | 🔧 B2 (đặt rõ ở mỗi lệnh) |
-| `--approach-option force_decision=false` **và** `--no-force-decision` | tắt forced choice | bật (`run_benchmark.py:1211`, `repo_context.py:64`) | 🔧 B2 |
-| `--repeats` | 3 (enforced, prompt-only), 1 (no-req, single call); repeat + condition trong tên run/file | **chưa có flag**; checkpoint `<dataset>_<approach>_results.json` bị ghi đè | 🔧 B2 |
+| `--approach-option max_iterations=5` | 5 cho mọi biến thể | harness luôn `setdefault` 10 từ `benchmark.yaml` nếu không truyền option (approach default 3 không bao giờ dùng tới) → **bắt buộc truyền ở mỗi lệnh** (run thí nghiệm thiếu option bị từ chối; giá trị khác 5 chỉ cảnh báo); test xác nhận 5 tới `Config` | 🧪 B2 |
+| `--approach-option force_decision=false` **và** `--no-force-decision` | tắt forced choice | mặc định vẫn bật; truyền cả hai thì `Config.verification.force_decision=False` (test); `run_config.json` ghi `approach_options` và `force_decision`. Run thí nghiệm thiếu một trong hai, hoặc để bật, bị từ chối | 🧪 B2 |
+| **Cổng cấu hình của harness** | run có `--repeats`/`--condition` và **không** `--dry-run` phải nêu rõ: `--model`, `--provider`, `seed=none`, `max_iterations`, `force_decision=false` + `--no-force-decision`, `--nmd-handling exclude`, `require_context` không `false`, `temperature` được nêu rõ (`none` hoặc một số; giá trị do Tuannt quyết, harness chỉ đòi phải nêu). Thiếu hoặc sai → `exit 2` kèm danh sách mọi lỗi cùng lúc, trước khi tạo approach hay gọi model | `run_benchmark.py` `_experiment_config_problems`. Run không có hai flag lặp và dry-run không bị chặn (người dùng khác giữ hành vi cũ). Chưa chặn: `route` (B1/B4 sẽ có giá trị hợp lệ) | 🧪 B2 |
+| `--repeats N`, `--condition <nhãn>` | 3 (enforced, prompt-only), 1 (no-req, single call); repeat + condition trong tên run/file | checkpoint `<dataset>_<approach>[_<route>]_<condition>_r<k>_results.json` (condition mặc định `full`); mỗi repeat 1 approach mới; result metadata + `findings.jsonl` có `run_id` (1/alert/repeat), `repeat`, `condition`; `--resume` theo từng repeat; không dùng chung với `--iteration-sweep`. Không truyền hai flag → tên cũ | 🧪 B2 |
+| Kiểm tra offline (không gọi model) | `python -m scripts.exp.b2_manifest_routing <manifest.jsonl> --expect <family>=<n> ...` (mọi alert ra đúng 1 policy, không có rule bị loại); `python -m scripts.exp.b2_route_impact [entries.json ...]` (dataset nào đổi route do B2) | 🧪 B2 |
+| `require_context` (approach option) | `true`: thiếu `functions/callers/classes.csv` → ERROR, không fallback snippet; ghi `context_path` vào metadata | mặc định `true` ở `vulnhunterx-repo`; engine có `verification.require_repo_context` (mặc định `false` cho CLI) chặn cả hai chỗ fallback | 🧪 B2 |
 | `--run-dir` | thư mục ở nơi lưu ngoài git | `benchmarks/results/<timestamp>` | ⏳ nơi lưu (Tuannt); tạm `../exp-data/runs/` |
 | `--anchor none` | manifest đã có sink line, không anchor lại bằng OpenGrep | `auto` | 💡 xác nhận ở B3c |
 | `--no-redact` | không redaction trong bộ nhớ (copy đã xử lý trên đĩa) | redaction bật cho dataset có rule | 💡 không có tác dụng nếu manifest không đăng ký rule; giữ để chắc chắn |
@@ -106,12 +110,13 @@ python benchmarks/scripts/run_benchmark.py `
   --approach-option route=<auto|prompt_only|legacy> `
   --approach-option max_iterations=5 `
   --approach-option force_decision=false --no-force-decision `
-  <option điều kiện của B4> --repeats <3|1> `
+  --approach-option seed=none --approach-option temperature=<⏳ Tuannt> `
+  <option điều kiện của B4> --repeats <3|1> --condition <full|...> `
   --anchor none --no-redact `
   -j <N> --llm-concurrency <N> `
   --run-dir <nơi lưu>/<track>_<method>_<condition>
 ```
-💡 Tên run đề xuất: `<track>_<method>_<condition>_r<k>` (`owasp_enforced_full_r1`, `owasp_promptonly_funconly_r3`, `realapp_noreq_comment_r1`). B2 chốt định dạng.
+Tên file do B2 đặt (🧪): trong `--run-dir`, checkpoint `<dataset>_vulnhunterx-repo_<route>_<condition>_r<k>_results.json` và call log `llm_calls_<dataset>_vulnhunterx-repo_<route>_<condition>_r<k>.jsonl`. 💡 Thư mục run: `<nơi lưu>/<track>_<method>_<condition>` như trên.
 
 ### 1.8 Lưu trữ, freeze, phân tích
 | Mục | Giá trị | TT |
@@ -154,6 +159,7 @@ Ngoài 3 phase này: `--dry-run` và mock. Mỗi lần gọi thật chỉ chạy
 - Kiểm tra trước khi qua ngày 3: có alert taint-flow với `codeFlows`; tỷ lệ alert thật OWASP có data-flow rời method (ngưỡng 30%); số alert theo họ × nhãn (so với 868/531/337); dev theo nguồn × họ × nhãn.
 
 ### Ngày 3–4 – 20–21/11 – P2 Core (B2, B6; mock)
+> Trạng thái: code + test mock xong, commit `dea728f` trên branch `exp/day3-4-core` (B2 + B6 gộp một PR, đã push, chưa mở PR). Temperature chưa chốt: không chặn merge (B6 chỉ thêm tham số), chặn chạy model thật (harness từ chối run không nêu temperature). Chi tiết: `docs/paper/run_log.md` (Day 3–4).
 - B2: `entry_to_finding` (`benchmarks/approaches/base.py:154-166`) truyền `cwe_ids` chuẩn hóa + tag gốc, message, data-flow path; thiếu context → ERROR (`engine.py:1865-1871`, `context/provider.py:365-368`), log context path; `max_iterations=5`, `force_decision=false`; `--repeats` + tên run; metadata `decision_source`, facts, end reason, confidence.
 - B6: bỏ seed; temperature theo quyết định của Tuannt; log JSONL mỗi call (client version, model ID trả về, tokens, run ID, `cached_tokens`); tắt tools; mỗi repeat là client/session mới.
 - Sau khi merge: cập nhật cột "Code hiện tại" ở mục 1.6, 1.7.
@@ -177,7 +183,7 @@ Ngoài 3 phase này: `--dry-run` và mock. Mỗi lần gọi thật chỉ chạy
 ### Ngày 9 – 27/11 – P6 Smoke (**LLM thật**)
 Trước khi chạy:
 - [ ] Model ID pin, key, temperature đã chốt (không còn ⏳ ở mục 1.6).
-- [ ] Không còn 🔧 cho B1, B2, B3c, B4, B6.
+- [ ] Không còn 🔧 hoặc 🧪 cho B1, B2, B3c, B4, B6 (🧪 = chưa merge).
 - [ ] `--run-dir` trỏ tới nơi lưu ngoài git.
 - [ ] Chạy thử 1 alert với `--dry-run --skip-preflight` cho từng method × điều kiện.
 Ghi sau khi chạy: run/giờ, điểm throttle, số session (`-j`, `--llm-concurrency`), repeat có biến thiên không (không alert nào đổi verdict qua 3 repeat → paper nói kiểm định dựa trên 1 run), model ID trả về, `decision_source` mọi run enforced, context path thật ở mọi run.

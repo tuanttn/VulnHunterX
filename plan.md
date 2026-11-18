@@ -264,7 +264,7 @@ Trên 20 alert dev, mọi method và điều kiện: đo **số run/giờ** và 
 - [x] Checkout dataset ở revision pin, đều resolve đúng SHA: BenchmarkJava `a452b3a` (đề xuất, chờ Tuannt), Juliet Java 1.3 (SHA-256 khớp), RealVuln `90c3221`, ZeroFalse `3ca00e4`, WebGoat `38096af`, VulnerableApp `6f5aded`; 5 dự án OpenVuln CWE-22 ở `buggy_commit_id`; **63/63 repo RealVuln Java** (24 human + 39 AI) ở commit pin
 - [x] Đối chiếu số liệu với dữ liệu thật: OWASP 1023/531/492 khớp từng họ; Juliet 724/724/724/3682 file; OpenVuln CWE-22 = 29 alert (23/6); RealVuln human 26 (18/4/4) → 20 sau khi bỏ WebGoat+VulnerableApp
 - [ ] **Lưu ý cho manifest:** `llm_generated` = 128 entry **chỉ khi tính 3 entry `CWE-77` vào command injection** (46 entry là CWE-78). Đây là cách phân họ của chính RealVuln (`config/cwe-families.json`). Plan viết "CWE-78" → giữ CWE nguồn trong manifest và ghi rõ mapping
-- [ ] Tạo branch làm việc theo `docs/GIT_WORKFLOW.md` (đang ở `exp-implementation`; chưa commit gì; mở PR tổng ngay ngày 1, không cần chờ Tuannt chốt mục 10)
+- [x] Tạo branch làm việc theo `docs/GIT_WORKFLOW.md` (đang ở `exp-implementation`; chưa commit gì; mở PR tổng ngay ngày 1, không cần chờ Tuannt chốt mục 10)
 
 ### Ngày 2 – Thứ Năm 19/11: OWASP + scan dev
 > **Tiến độ ngày 2 (cập nhật):** xong phần dữ liệu, chi tiết và hash trong `docs/paper/run_log.md` (mục Day 2). Code ở branch `exp/day2-data-prep` (B3b + B3a + dev gộp một PR), commit `9de3003`, PR draft #2. Commit OWASP `a452b3a` đang dùng **tạm**, chờ anh Tuannt. Kết quả chính: manifest OWASP 809 alert (488 thật + 321 false alarm; ZeroFalse 868 = 531 + 337, chênh 59 hoàn toàn do rule `exec-tainted-environment` bị loại); **73.2% alert thật có data-flow rời method** (đạt ngưỡng 30%); dev Juliet họ path chỉ có 36 false alarm (12 case) → nhiều khả năng dùng pooled rule.
@@ -287,13 +287,16 @@ Trên 20 alert dev, mọi method và điều kiện: đo **số run/giờ** và 
 - [ ] Còn lại từ ngày 2: PR #2 chờ anh Tuannt review và merge; dev manifest và mẫu Juliet (100 case/họ, ≥50 thật) làm ở B3c; nhãn cho alert WebGoat/VulnerableApp không khớp ground truth
 
 ### Ngày 3–4 – Thứ Sáu 20/11 – Thứ Bảy 21/11: B2 + B6 (làm trước, mọi thứ khác phụ thuộc)
-- [ ] **B2:** `entry_to_finding` truyền `cwe_ids` (chuẩn hóa), message, data-flow path
-- [ ] **B2:** thiếu context → ERROR, không fallback snippet; log context path
-- [ ] **B2:** iteration limit 5, `force_decision=False` cho mọi biến thể; không verdict → unresolved
-- [ ] **B2:** `--repeats`; repeat + condition trong tên run/file
-- [ ] **B2:** result metadata: `decision_source`, facts, lý do kết thúc, confidence
-- [ ] **B6:** completion thuần, tắt tools, không memory/cache; log JSONL từng call (client version, model ID trả về, tokens, run ID)
-- [ ] Test (mock): entry SQLi → `sql_injection_java`, metadata `policy`; mọi alert manifest resolve ra policy; 2 repeat là 2 session riêng; log có model ID trả về; thiếu context → ERROR
+> **Tiến độ (cập nhật):** code + test mock xong, commit `dea728f` trên branch `exp/day3-4-core` (B2 + B6 gộp một PR, đã push lên `tuanttn/VulnHunterX`; PR do Khoa mở, chưa có review). Chi tiết trong `docs/paper/run_log.md` (Day 3–4). B6 chỉ thêm tham số temperature, không chọn giá trị: không chặn merge, nhưng harness từ chối run thí nghiệm thật nếu không nêu temperature.
+
+- [x] **B2:** `entry_to_finding` truyền `cwe_ids` (chuẩn hóa), message, data-flow path
+- [x] **B2:** thiếu context → ERROR, không fallback snippet; log context path
+- [x] **B2:** iteration limit 5, `force_decision=False` cho mọi biến thể; không verdict → unresolved. Harness tự đặt 10 và bật forced choice nếu không có option, nên run thí nghiệm (`--repeats`/`--condition`, không `--dry-run`) bị từ chối khi thiếu hoặc sai các tham số cố định (model, provider, seed, iterations, forced choice, NMD, context)
+- [x] **B2:** `--repeats`; repeat + condition trong tên run/file (`--condition`)
+- [x] **B2:** result metadata: `decision_source`, facts, lý do kết thúc, confidence (trường `result_metadata`)
+- [x] **B6:** completion thuần, tắt tools, không memory/cache; log JSONL từng call (client version, model ID trả về, tokens, run ID)
+- [x] Test (mock): entry SQLi → `sql_injection_java`, metadata `policy`; mọi alert manifest resolve ra policy (809/809); 2 repeat là 2 session riêng; log có model ID trả về; thiếu context → ERROR
+- [ ] ⏳ Temperature (mục 9 #4) → Tuannt chốt trước ngày 9 (không chặn merge B6; chặn chạy model thật)
 
 ### Ngày 5 – Thứ Hai 23/11: B3c + B7
 - [ ] **B3c:** manifest adapter (1 `GroundTruthEntry`/alert, `sink_line`, `rule_id`, CWE, message, data-flow path, `metadata.repo_name`, `code_snippet` cho single call; nhãn chỉ từ manifest; không redaction rule)
@@ -393,9 +396,9 @@ Trên 20 alert dev, mọi method và điều kiện: đo **số run/giờ** và 
 ```
 main                                  ← không đụng tới cho đến cuối
  └── exp-implementation               ← branch giao nộp (đã có trên origin)
-      ├── exp/b2-harness     ──PR──►  mỗi build item: 1 branch ngắn từ exp-implementation,
-      ├── exp/b6-model-client ─PR──►  1 PR vào exp-implementation cho Tuannt check,
-      ├── exp/b1-prompt-only ──PR──►  merge xong thì xóa branch con
+      ├── exp/day3-4-core    ──PR──►  mỗi build item: 1 branch ngắn từ exp-implementation,
+      ├── exp/b1-prompt-only ──PR──►  1 PR vào exp-implementation cho Tuannt check,
+      ├── exp/b4-hard-condition ─PR─►  merge xong thì xóa branch con
       └── ...
  + 1 PR tổng (draft) exp-implementation → main, dùng để báo cáo ngày
 ```
@@ -406,8 +409,7 @@ main                                  ← không đụng tới cho đến cuối
 | --- | --- | --- | --- |
 | 1 | Tài liệu (`plan.md`, phần thí nghiệm của `CLAUDE.md`) | `exp/docs-plan` | – |
 | 2 | B3b bản copy OWASP + B3a scan → manifest + dữ liệu dev (Juliet, WebGoat, VulnerableApp) | `exp/day2-data-prep` | – |
-| 3–4 | B2 harness + engine | `exp/b2-harness` | – |
-| 3–4 | B6 model client | `exp/b6-model-client` | – |
+| 3–4 | B2 harness + engine, B6 model client (gộp một PR vì hai item dùng chung `run_benchmark.py`, `repo_context.py` và test lặp) | `exp/day3-4-core` | – |
 | 5 | B3c manifest adapter | `exp/b3c-manifest-adapter` | B2, ngày 2 |
 | 5 | B7 manifest track phụ | `exp/b7-realapp-manifests` | ngày 2 |
 | 6–7 | B1b evidence check | `exp/b1b-evidence-check` | B2 |
