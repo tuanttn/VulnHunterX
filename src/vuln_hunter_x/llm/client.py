@@ -9,6 +9,7 @@ import json
 import logging
 import os
 import re
+import threading
 import time
 from typing import Any
 
@@ -49,6 +50,7 @@ from vuln_hunter_x.core.constants import (
 )
 from vuln_hunter_x.core.types import Finding, GuidedQuestions, Verdict
 from vuln_hunter_x.core.validation import openai_compat_kwargs
+from vuln_hunter_x.llm.call_log import CallLogger, litellm_version, utc_now
 from vuln_hunter_x.llm.decision_strategy import (
     Abstain,
     DecisionStrategy,
@@ -74,6 +76,26 @@ def _parsed_signals(parsed: dict) -> dict:
     """
     sig = parsed.get("signals")
     return sig if isinstance(sig, dict) else {}
+
+
+# Request parameters whose silent removal by ``drop_params`` matters to a run.
+_TRACKED_PARAMS = ("temperature", "seed", "response_format", "max_tokens", "tools", "tool_choice")
+_SUPPORTED_PARAMS_CACHE: dict[str, frozenset[str] | None] = {}
+
+
+def _supported_params(model: str) -> frozenset[str] | None:
+    """litellm's supported-parameter list for ``model``, or None when unknown.
+
+    A static table inside litellm: it can not see per-model server-side
+    behaviour, so it is evidence of a likely drop, not proof.
+    """
+    if model not in _SUPPORTED_PARAMS_CACHE:
+        try:
+            params = litellm.get_supported_openai_params(model=model)
+        except Exception:
+            params = None
+        _SUPPORTED_PARAMS_CACHE[model] = frozenset(params) if params else None
+    return _SUPPORTED_PARAMS_CACHE[model]
 
 
 def _extract_cached_input_tokens(usage: Any) -> int:
@@ -114,7 +136,7 @@ class LLMClient:
         self,
         provider: str = DEFAULT_LLM_PROVIDER,
         model: str = DEFAULT_LLM_MODEL,
-        temperature: float = DEFAULT_LLM_TEMPERATURE,
+        temperature: float | None = DEFAULT_LLM_TEMPERATURE,
         seed: int | None = DEFAULT_LLM_SEED,
         max_tokens: int = DEFAULT_LLM_MAX_TOKENS,
         num_retries: int = 1,
@@ -123,6 +145,8 @@ class LLMClient:
         ollama_key_state_path: str | os.PathLike[str] | None = None,
         gemini_api_keys: list[str] | None = None,
         gemini_key_state_path: str | os.PathLike[str] | None = None,
+        call_logger: CallLogger | None = None,
+        call_context: dict[str, Any] | None = None,
     ):
         """Initialize the LLM client.
 
@@ -130,7 +154,8 @@ class LLMClient:
             provider: LLM provider ("openai", "anthropic", "ollama",
                 "deepseek", or "gemini").
             model: Model name (e.g. "gpt-4o", "claude-sonnet-4-20250514").
-            temperature: Sampling temperature for LLM responses.
+            temperature: Sampling temperature for LLM responses. ``None``
+                sends no temperature, so the service default applies.
             seed: Fixed sampling seed sent on every completion so identical
                 input reproduces identical output run-to-run (#150). ``None``
                 disables seeding. Dropped by litellm on providers without
@@ -151,6 +176,11 @@ class LLMClient:
                 same pool semantics as ``ollama_api_keys``. Defaults to
                 ``GEMINI_API_KEYS`` / comma-separated ``GEMINI_API_KEY``
                 (``GOOGLE_API_KEY`` single-key fallback) when omitted.
+            call_logger: Optional callable receiving one record per completion
+                (see ``llm/call_log.py``): returned model ID, client version,
+                tokens, latency, parameters sent. No prompt or response text.
+            call_context: Labels copied into every call record (run ID, entry
+                ID, repeat, condition, ...).
         """
         self.provider = provider
         self.model = model
@@ -163,6 +193,14 @@ class LLMClient:
         self.num_retries = num_retries
         self.request_timeout = request_timeout
         self.prompt_builder = PromptBuilder()
+        self.call_logger = call_logger
+        self.call_context: dict[str, Any] = dict(call_context or {})
+        # Model IDs the service reported back (``response.model``), in order of
+        # first appearance. Read by callers that record the returned model.
+        self.models_returned: list[str] = []
+        self._call_index = 0
+        self._call_lock = threading.Lock()
+        self._cached_warned = False
 
         # Configure provider-specific settings
         self._is_ollama_cloud = False
@@ -280,10 +318,14 @@ class LLMClient:
         kwargs: dict[str, Any] = {
             "model": model,
             "messages": messages,
-            "temperature": self.temperature if temperature is None else temperature,
             "max_tokens": self.max_tokens,
             "timeout": self.request_timeout,
         }
+        # ``temperature=None`` on the client means "send none": the service
+        # default applies (no assumption that a temperature is honoured).
+        resolved_temperature = self.temperature if temperature is None else temperature
+        if resolved_temperature is not None:
+            kwargs["temperature"] = resolved_temperature
         # #150: fixed seed for run-to-run reproducibility; litellm.drop_params
         # strips it on providers without seed support. ``seed=None`` (the
         # voting samples) requests provider entropy.
@@ -346,6 +388,105 @@ class LLMClient:
         return any(marker in msg for marker in cls._OLLAMA_QUOTA_MARKERS)
 
     def _completion(self, kwargs: dict) -> Any:
+        """Run one completion and, with a call logger, record it.
+
+        Every model call of this client passes here, so the log has one line
+        per call (including a retry after a rejected ``response_format``,
+        which is recorded as part of the same call)."""
+        if getattr(self, "call_logger", None) is None:
+            return self._completion_dispatch(kwargs)
+        start = time.monotonic()
+        try:
+            response = self._completion_dispatch(kwargs)
+        except Exception as exc:
+            self._log_call(kwargs, None, time.monotonic() - start, error=exc)
+            raise
+        self._log_call(kwargs, response, time.monotonic() - start)
+        return response
+
+    def _log_call(
+        self,
+        kwargs: dict,
+        response: Any,
+        latency_s: float,
+        error: Exception | None = None,
+    ) -> None:
+        """Write one call record. Never raises: a logging failure must not fail
+        the verification, but it is reported loudly."""
+        with self._call_lock:
+            self._call_index += 1
+            index = self._call_index
+        record: dict[str, Any] = {
+            **self.call_context,
+            "ts": utc_now(),
+            "call_index": index,
+            "provider": self.provider,
+            "model_requested": kwargs.get("model", self.model),
+            "model_returned": None,
+            "client": "litellm",
+            "client_version": litellm_version(),
+            "latency_s": round(latency_s, 3),
+            "params_sent": {
+                "names": sorted(k for k in _TRACKED_PARAMS if k in kwargs),
+                "num_retries_configured": kwargs.get("num_retries"),
+                "temperature": kwargs.get("temperature"),
+                "temperature_sent": "temperature" in kwargs,
+                "seed_sent": "seed" in kwargs,
+                "max_tokens": kwargs.get("max_tokens"),
+                "response_format": "response_format" in kwargs,
+                "tools_sent": "tools" in kwargs or "tool_choice" in kwargs,
+                "drop_params": bool(getattr(litellm, "drop_params", False)),
+            },
+            "litellm_cache_enabled": getattr(litellm, "cache", None) is not None,
+        }
+        # With ``drop_params`` litellm removes parameters the model does not
+        # support without telling the caller. List the sent parameters that are
+        # absent from litellm's own supported list for this model, so a run that
+        # asked for a seed or a temperature can be seen not to have had it.
+        supported = _supported_params(kwargs.get("model", self.model))
+        record["params_outside_litellm_supported_list"] = (
+            None
+            if supported is None
+            else sorted(k for k in _TRACKED_PARAMS if k in kwargs and k not in supported)
+        )
+        if error is not None:
+            record["error"] = {
+                "type": type(error).__name__,
+                "status_code": getattr(error, "status_code", None),
+            }
+        if response is not None:
+            returned = getattr(response, "model", None)
+            record["model_returned"] = returned
+            if returned and returned not in self.models_returned:
+                self.models_returned.append(returned)
+            usage = getattr(response, "usage", None)
+            cached = _extract_cached_input_tokens(usage)
+            record["usage"] = {
+                "input_tokens": getattr(usage, "prompt_tokens", 0) or 0,
+                "output_tokens": getattr(usage, "completion_tokens", 0) or 0,
+                "total_tokens": getattr(usage, "total_tokens", 0) or 0,
+                "cached_input_tokens": cached,
+            }
+            choices = getattr(response, "choices", None) or []
+            record["finish_reason"] = (
+                getattr(choices[0], "finish_reason", None) if choices else None
+            )
+            record["response_id"] = getattr(response, "id", None)
+            if cached and not self._cached_warned:
+                self._cached_warned = True
+                logger.warning(
+                    "Provider reported %d cached input tokens for %s; "
+                    "the provider caches prompts for this model.",
+                    cached,
+                    self.model,
+                )
+        try:
+            assert self.call_logger is not None
+            self.call_logger(record)
+        except Exception:
+            logger.exception("LLM call log write failed")
+
+    def _completion_dispatch(self, kwargs: dict) -> Any:
         """Dispatch to the key-rotating completion, transparently dropping an
         unsupported ``response_format`` (and disabling it for the session) when
         the endpoint rejects it — #149."""

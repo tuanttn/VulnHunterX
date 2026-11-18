@@ -19,23 +19,29 @@ from __future__ import annotations
 import json
 import re
 import time
+import uuid
+from pathlib import Path
 from typing import Any
 
 from benchmarks.adapters.ground_truth import GroundTruthEntry
+from benchmarks.adapters.registry import OptionSpec
 from benchmarks.approaches.base import (
     _CWE_MESSAGES,
     PRED_ERROR,
     PRED_FP,
     PRED_NMD,
     PRED_TP,
+    SAMPLING_DEFAULT,
     BenchmarkResult,
     _dry_run_result,
+    parse_sampling_option,
 )
 from benchmarks.approaches.registry import (
     LLMConfig,
     RegisteredApproach,
     register_approach,
 )
+from vuln_hunter_x.llm.call_log import shared_call_log
 
 _OPEN_TAG = "<code_under_review>"
 _CLOSE_TAG = "</code_under_review>"
@@ -171,12 +177,31 @@ class SingleShotCWEApproach(RegisteredApproach):
     name = "single-shot-cwe"
     requires_llm = True
     is_baseline = True
-    option_schema: dict = {}
+    option_schema: dict = {
+        "seed": OptionSpec(
+            str, default="default", help="default (client seed) | none (not sent) | <int>."
+        ),
+        "temperature": OptionSpec(
+            str,
+            default="default",
+            help="default (client temperature) | none (not sent) | <float>.",
+        ),
+        "call_log": OptionSpec(
+            str, default="", help="JSONL path for one record per model call (empty: off)."
+        ),
+    }
 
     @classmethod
     def from_options(cls, llm: LLMConfig | None, options: dict[str, Any]) -> SingleShotCWEApproach:
         llm = llm or LLMConfig()
-        return cls(provider=llm.provider, model=llm.model, dry_run=llm.dry_run)
+        return cls(
+            provider=llm.provider,
+            model=llm.model,
+            dry_run=llm.dry_run,
+            seed=options.get("seed", "default"),
+            temperature=options.get("temperature", "default"),
+            call_log=Path(options["call_log"]) if options.get("call_log") else None,
+        )
 
     def __init__(
         self,
@@ -184,19 +209,35 @@ class SingleShotCWEApproach(RegisteredApproach):
         model: str = "gpt-4o",
         dry_run: bool = False,
         client: Any = None,
+        seed: str | int | None = "default",
+        temperature: str | float | None = "default",
+        call_log: Path | None = None,
     ) -> None:
         self._provider = provider
         self._model = model
         self._dry_run = dry_run
-        self._client = client  # injectable for tests; built lazily otherwise
+        self._client = client  # injectable for tests; otherwise one client per entry
+        self._sampling: dict[str, Any] = {}
+        parsed_seed = parse_sampling_option("seed", seed, int)
+        if parsed_seed is not SAMPLING_DEFAULT:
+            self._sampling["seed"] = parsed_seed
+        parsed_temperature = parse_sampling_option("temperature", temperature, float)
+        if parsed_temperature is not SAMPLING_DEFAULT:
+            self._sampling["temperature"] = parsed_temperature
+        self._call_log = shared_call_log(call_log) if call_log else None
+        # Repeat / condition labels set by the harness (``--repeats``, ``--condition``).
+        self.run_labels: dict[str, Any] = {}
 
-    def _get_client(self) -> Any:
+    def _get_client(self, call_context: dict[str, Any] | None = None) -> Any:
+        """The injected client (tests) or a fresh one: one session per entry."""
         if self._client is None:
             from vuln_hunter_x.core.config import Config
             from vuln_hunter_x.llm.client import LLMClient
 
-            cfg = Config.from_dict({"provider": self._provider, "model": self._model})
-            self._client = LLMClient(
+            cfg = Config.from_dict(
+                {"provider": self._provider, "model": self._model, **self._sampling}
+            )
+            return LLMClient(
                 provider=cfg.llm.provider,
                 model=cfg.llm.model,
                 temperature=cfg.llm.temperature,
@@ -208,6 +249,8 @@ class SingleShotCWEApproach(RegisteredApproach):
                 ollama_key_state_path=cfg.paths.output_dir / ".ollama_key_state.json",
                 gemini_api_keys=cfg.llm.gemini_api_keys,
                 gemini_key_state_path=cfg.paths.output_dir / ".gemini_key_state.json",
+                call_logger=self._call_log,
+                call_context=call_context,
             )
         return self._client
 
@@ -215,13 +258,22 @@ class SingleShotCWEApproach(RegisteredApproach):
         if self._dry_run:
             return _dry_run_result(entry, self.name)
         start = time.monotonic()
+        run_id = uuid.uuid4().hex
         messages = [
             {"role": "system", "content": _SYSTEM},
             {"role": "user", "content": build_prompt(entry)},
         ]
         try:
             # Reuses the client's metered single-turn completion (tokens + cost).
-            raw, usage = self._get_client()._complete_and_meter(messages, temperature=None)
+            client = self._get_client(
+                {
+                    **self.run_labels,
+                    "run_id": run_id,
+                    "entry_id": entry.id,
+                    "approach": self.name,
+                }
+            )
+            raw, usage = client._complete_and_meter(messages, temperature=None)
         except Exception as exc:  # noqa: BLE001 - one bad call must not abort the run
             return BenchmarkResult(
                 entry=entry,
@@ -230,7 +282,20 @@ class SingleShotCWEApproach(RegisteredApproach):
                 reasoning=f"LLM call failed: {type(exc).__name__}: {exc}",
                 elapsed_seconds=time.monotonic() - start,
                 iterations=1,
+                result_metadata={
+                    **self.run_labels,
+                    "run_id": run_id,
+                    "end_reason": "llm_error",
+                },
             )
+        returned = getattr(client, "models_returned", None)
+        result_metadata = {
+            **self.run_labels,
+            "run_id": run_id,
+            "seed": self._sampling.get("seed", "default"),
+            "temperature": self._sampling.get("temperature", "default"),
+            "models_returned": [str(m) for m in returned] if isinstance(returned, list) else [],
+        }
         common: dict[str, Any] = {
             "entry": entry,
             "elapsed_seconds": time.monotonic() - start,
@@ -241,6 +306,7 @@ class SingleShotCWEApproach(RegisteredApproach):
             "output_tokens": int(usage.get("output_tokens", 0)),
             "cached_input_tokens": int(usage.get("cached_input_tokens", 0)),
             "cost_usd": float(usage.get("cost_usd", 0.0)),
+            "result_metadata": result_metadata,
         }
         parsed = parse_verdict_json(raw)
         if parsed is None:
