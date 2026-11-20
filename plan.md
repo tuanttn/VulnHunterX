@@ -299,7 +299,7 @@ Trên 20 alert dev, mọi method và điều kiện: đo **số run/giờ** và 
 - [ ] ⏳ Temperature (mục 9 #4) → Tuannt chốt trước ngày 9 (không chặn merge B6; chặn chạy model thật)
 
 ### Ngày 5 – Thứ Hai 23/11: B3c + B7
-> **Tiến độ ngày 5 (cập nhật):** code + dữ liệu xong, commits `7084c09` và `696b89b` trên `exp/day5-manifests` (cục bộ, chưa push, xếp chồng lên hai branch chưa merge). Chi tiết và hash trong `docs/paper/run_log.md` (Day 5). Kết quả: manifest ứng dụng thực **46** alert (18 SQLi người viết, OpenVuln 22 thật + 6 false alarm), manifest AI **79** alert (cmdi 36, path 20, SQLi 23), dev manifest **304** (path chỉ 12 false alarm → luật gộp áp dụng), **253** alert chờ nhãn sinh viên (sheet đã tạo, **chưa gửi**).
+> **Tiến độ ngày 5 (cập nhật):** code + dữ liệu xong, commits `7084c09` và `696b89b` trên `exp/day5-manifests` (cục bộ, chưa push, xếp chồng lên hai branch chưa merge). Chi tiết và hash trong `docs/paper/run_log.md` (Day 5). Kết quả: manifest ứng dụng thực **46** alert (18 SQLi người viết, OpenVuln 22 thật + 6 false alarm), manifest AI **79** alert (cmdi 36, path 20, SQLi 23), dev manifest **304** (path chỉ 12 false alarm → luật gộp áp dụng), **253** alert chờ nhãn sinh viên (sheet đã tạo, **chưa gửi**). Hai bản copy dev (WebGoat, VulnerableApp) đã xóa build file và quét lại cùng điều kiện với các track kiểm thử: tập alert không đổi (66 và 52), dev manifest giữ nguyên.
 
 - [x] **B3c:** manifest adapter (1 `GroundTruthEntry`/alert, `sink_line`, `rule_id`, CWE, message, data-flow path, `metadata.repo_name`, `code_snippet` cho single call; nhãn chỉ từ manifest; không redaction rule)
 - [x] Test: mọi entry qua `filter_for_approach` của `vulnhunterx-repo`; số entry = số dòng manifest (OWASP 809, dev 304, realapp 46, AI 79)

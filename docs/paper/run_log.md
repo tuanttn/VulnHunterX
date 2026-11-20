@@ -218,7 +218,7 @@ Status: B3c and B7 done on a **local** stacked branch `exp/day5-manifests` (comm
 | `ai_manifest.jsonl` | 79 (cmdi 36, path 20, SQLi 23; all genuine) | `6ada52e33e56de3147371afa4f48081967324290a74c2fd90b7afd54ac0f8824` |
 | `pending_labels.jsonl` | 207 human-written alerts without a ground-truth match (SQLi 132, path 72, cmdi 3) | `27031e9a1b400bd1f47adcb4ed1e956871922e0daeb33c8c7737f692d0f20219` |
 | `mismatch.jsonl` | 55 (44 ground-truth entries not flagged, 7 not analysed, 3 repos excluded, 1 OpenVuln merge) | `9da02b76cfc0b063246923026acee5a50df181000ba4fa5d0b1e756309ab2923` |
-| `labeling_sheet.csv` | 253 (207 above + 46 development alerts) | `1d015bb7cbb64d303915023e8a83cd80aa2a71bb4e94e5cc10852ac6a792b68d` |
+| `labeling_sheet.csv` | 253 (207 above + 46 development alerts) | `740200e9e18aafd131b14f27e798b1013047c0561721ff5b2f52d71b8cdcd73a` (after the dev rescan; before it `1d015bb7cbb6…`) |
 | `labeling_key.csv` | 253 (sheet ID -> alert, source, copy) | `7c13444e07a80e2906834819816c04460fc58e710ae52767a8bb963bf4a5f906` |
 | `name_map.json` | 66 repos | `da4b87c49416132bdd1114afb0cc373a097043e2d1906790974fd32b41e15294` |
 
@@ -253,7 +253,20 @@ Re-checked the scans and the numbers independently of the pipeline code.
 
 **Deviations and limits that remain (to state or decide).**
 - *Scan conditions differ from v3.3 §3.2.* v3.3 says each repository is scanned at its pinned commit; the copies are scanned **without their build files** (reason above). v3.3 names no such step. Dependency types stay unresolved. Measured effect: `app-03` (35 files, 27 import Spring) yields **0 alerts**, `app-21` (7 files, 5 import Spring) 1 alert. Among ground-truth entries the flag rate does not depend clearly on the framework (AI: Spring files 62% flagged, other 68%), so the loss cannot be attributed to missing dependencies from these counts. A controlled comparison (rescan two or three small Spring repos with dependencies resolved) would need CodeQL to run the repo's Maven/Gradle again; **not done, needs Khoa's decision**.
-- *Development copies are scanned under other conditions.* `webgoat-java` and `vulnerableapp-java` still hold 4 build files each and were scanned on day 2 with the build tools allowed. The test tracks are scanned without. Dev data only (smoke, pilot), but the pilot then sees alerts produced differently from the test alerts. Options: strip them and rescan both (about 10-20 minutes; the day-2 counts and the dev manifest would change), or state it. Not done.
+- *Development copies:* resolved by the rescan below (they used to be scanned with their build tools allowed).
 - *Definition choices not in v3.3:* one alert per (file, line, family) for RealVuln (v3.3 says one alert per test case); the two OpenVuln reports of one sink merged (28 alerts instead of 29); Juliet "case" = (file, bad|good) unit.
 - *AI track:* 79 of 128 entries; 42 analysable entries not flagged by CodeQL and 7 not analysable. The three Kotlin repos have no context and no manifest rows.
 - *First-pass scan errors* (`app-03` paging file, `app-05`, `app-06`, `app-09`, `app-12`, `app-22` out of memory) were retried with more memory; the accepted SARIF of each is the retry's.
+
+### Day 5 – development copies rescanned without build files
+Done before the student sheet was sent. `webgoat-java` and `vulnerableapp-java` (copies; the checkouts are untouched) had their build files removed (WebGoat: `.mvn/`, `mvnw`, `mvnw.cmd`, `pom.xml`; VulnerableApp: `build.gradle`, `gradle/wrapper/`, `gradlew`, `gradlew.bat`; list in `exp-data/work/dev/dev_strip.json`) and were scanned again with the same CodeQL 2.27.4 and suite, one repo at a time (340 s and 216 s, no failed query, no build-tool trace in the create logs). WebGoat has one `.java` file less (411 -> 410, `.mvn/wrapper/MavenWrapperDownloader.java`, build tooling). Context was rebuilt from the stripped copies (3 of 3 CSVs each).
+
+Result, compared with the day-2 scans (kept in `exp-data/work/dev/day2_backup/`):
+- **No alert changed.** SARIF results are 66 (WebGoat) and 52 (VulnerableApp) in both scans, none lost, none gained (compared by rule, file and line).
+- **Development manifest byte-identical** (304 entries, `0d3e886e1c9d09cfd8d0002b77b1d9f7e7080ac66a250ba0ad908171877a0f8a`); routing 100 / 102 / 102; all 304 pass `filter_for_approach` and have a snippet.
+- Pending list: the same 46 alerts. Only the **data-flow path of 5 WebGoat path-traversal alerts** differs (CodeQL picked another flow to the same sink in the second run), so `dev_pending.jsonl` (`8f1a925658996e5baac71cb119e7b2df408eb6fbd4cbc74f1aa4a62d1e18215e`) and the sheet column `dataflow` of those 5 rows changed; the student sheet was regenerated (hash above) and **has not been sent**.
+- The pooled rule is unchanged (path: 12 development false alarms).
+- New SARIF hashes: WebGoat `3b824418db06ce5cf9187784cf9a0c352a46fe94194981c73205117759b4081c`, VulnerableApp `0933024261d9bdcda174e42ed7161bb2c44883fbfa38605457563c5d4ce35c58`.
+
+Consequences. The development tier is now scanned under the same conditions as the test tracks. The day-2 counts of WebGoat and VulnerableApp (31 and 15 pending, 1 + 3 genuine) stay correct. Also seen: two CodeQL runs of the same code can choose different data-flow paths for the same alert, so a manifest records the path of one run; that is one more reason the manifests are frozen with their hashes.
+The comparison with dependencies on small Spring repos was **not** run (it would execute the repos' Maven/Gradle; see "Things to state or decide"); it goes to Tuannt as a question.
