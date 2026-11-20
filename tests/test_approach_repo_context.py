@@ -55,6 +55,14 @@ def repos(tmp_path):
     return tmp_path
 
 
+def _with_context(out: Path, repo: str = "proj__abcd1234", lang: str = "python") -> Path:
+    ctx = out / lang / repo / "context"
+    ctx.mkdir(parents=True)
+    for name in ("functions.csv", "callers.csv", "classes.csv"):
+        (ctx / name).write_text("h\n", encoding="utf-8")
+    return out
+
+
 def test_registered_and_options():
     a = build_approach("vulnhunterx-repo", options={"route": "legacy", "max_iterations": "2"})
     assert isinstance(a, rc.RepoContextApproach) and a._route == "legacy"
@@ -63,7 +71,7 @@ def test_registered_and_options():
 
 
 def test_calls_verify_findings_with_explicit_repo_name_legacy_route(repos, tmp_path):
-    out = tmp_path / "out"
+    out = _with_context(tmp_path / "out")
     a = rc.RepoContextApproach(route="legacy", repos_dir=repos, output_dir=out)
     engine = MagicMock()
     engine.verify_findings.return_value = SimpleNamespace(verdicts=[_verdict()])
@@ -87,8 +95,9 @@ def test_calls_verify_findings_with_explicit_repo_name_legacy_route(repos, tmp_p
     assert "decision_source=policy" in r.reasoning
 
 
-def test_auto_route_keeps_registry(repos):
-    a = rc.RepoContextApproach(route="auto", repos_dir=repos)
+def test_auto_route_keeps_registry(repos, tmp_path):
+    out = _with_context(tmp_path / "out")
+    a = rc.RepoContextApproach(route="auto", repos_dir=repos, output_dir=out)
     engine = MagicMock()
     sentinel = object()
     engine._policy_registry = sentinel
