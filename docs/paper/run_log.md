@@ -194,3 +194,48 @@ Status against the checklist: all items of plan §7 day 3–4 are done and teste
 ### Open at the end of Day 3–4
 0. New since the follow-up: re-baseline decision (item 3: only if a pre/post comparison with old numbers is wanted, needs an explicit run request and a pinned model), billed-versus-logged token check (item 2) before any number is published. The handoff test (item 5) is done.
 1. Temperature (blocks real runs and the freeze, not the merge). 2. Model + pinned ID, key. 3. Open the PR for `exp/day3-4-core` (`dea728f`); review/merge it together with PR #1 and #2 before day 5 starts. 4. Earlier open points (OWASP commit, 488 genuine alerts, storage) unchanged.
+
+## Day 5 – Mon 23 Nov 2026 – P3 Manifest (run 20 Nov, machine clock)
+
+Status: B3c and B7 done on a **local** stacked branch `exp/day5-manifests` (commit `7084c09`, on top of `exp/day3-4-core` and `exp/day2-data-prep`; not pushed, no PR). **Config-gate step 3 (dependencies merged) was waived on purpose** at Khoa's request; the branch needs `rebase --onto` when the base PRs merge. No model call (0 runs). The ⏳ items are unchanged (OWASP commit `a452b3a` provisional, 488 genuine alerts, pooled rule, temperature, model).
+
+### B3c – manifest adapter and development manifest
+- Adapter `alert-manifest` (`benchmarks/adapters/manifest_adapter.py`), registered in `registry._ensure_loaded`. One entry per row; strict on the `.sha256` sidecar, labels, families, duplicate IDs and unsafe paths. Model-visible metadata is only `message`, `cwe_ids`, `cwe_tags_raw`, `dataflow_path` (plus `repo_name`, `lang` to locate the copy); `source_case`, `source_id`, `source_cwe` and the row label are never copied into the entry. No redaction rule. `code_snippet`: numbered window of ±40 lines read from the copy (the window is Khoa's proposal; only the single-call baseline uses it).
+- Checked on the real manifests: OWASP 809 rows -> 809 entries, all pass `filter_for_approach` for `vulnhunterx-repo`, all resolve to one policy (479 / 131 / 199).
+- Development manifest (`scripts/exp/b3c_dev_manifest.py`, seed `vhx-dev-v33-seed1`): **304 entries** = Juliet 300 (sqli 50 genuine + 50 false alarm, cmdi 50 + 50, path 88 + 12) + WebGoat 1 + VulnerableApp 3 genuine. 46 WebGoat/VulnerableApp alerts without a ground-truth match are *pending* (sheet), not in the manifest. Routing: 102 / 102 / 100. **Pooled rule applies to path traversal**: 12 development false alarms (< 20). Interpretation to confirm: a Juliet "case" is one (file, bad|good) unit; v3.2 §3.3 does not define it.
+- Hashes (outside git): `dev/dev_manifest.jsonl` `0d3e886e1c9d09cfd8d0002b77b1d9f7e7080ac66a250ba0ad908171877a0f8a`; `dev/dev_pending.jsonl` `0fe108228489fc0f5448a2f3027db2e571d2e23f56361409707cbced614fbb89`.
+
+### B7 – real-application and AI tracks
+- Inventory: 22 human-written + 39 AI RealVuln repos (WebGoat and VulnerableApp left out) + 5 OpenVuln CWE-22 projects = 66. Copies are `repos/java/app-NN`, `gen-NN`, `oss-NN` (real names can reach the model through `Finding.repo_name`, and many carry label hints). Map back to the real names: `exp-data/work/b7/name_map.json`. No `.git` in the copies; `verify` confirms each copy equals its checkout apart from build files.
+- Scan: CodeQL 2.27.4, `codeql/java-queries` 1.12.0, `java-security-extended`, `--build-mode=none`, 56 of 58 repos with Java files on the first full pass, the last two (`app-09`, `app-22`) on a retry with 6 GB; **58 of 58 done**. Total CodeQL time about 3.9 h. The three Kotlin AI repos (`gen-11`, `gen-24`, `gen-37`) have no `.java` files and are listed as excluded with their 7 ground-truth entries counted as "not analysed". Out-of-memory failures at 3-4 GB (`app-03`, `app-05`, `app-06`, `app-09`, `app-12`, `app-22`) were retried one repo at a time with more memory; a SARIF is accepted only for a repo recorded `ok`.
+- Context: `functions.csv`, `callers.csv`, `classes.csv` exist for all 63 copies that have Java (checked file by file; `prepare` exits 0 without them). OpenVuln copies use the dataset's own SARIF.
+- OpenVuln: the dataset's 29 alerts and labels are used as shipped (`alert_number` = 1-based index into the SARIF). Alerts 1 and 2 of spark are the same sink (same rule, file, line, label) reported with two data-flow paths: merged into one row, the second listed in `mismatch.jsonl` (`same_alert_as`). Result **28 alerts: 22 genuine + 6 false alarm** (plan: 29 = 23 + 6).
+- Manifests (outside git, `exp-data/work/b7/`):
+
+| File | Rows | SHA-256 |
+| --- | --- | --- |
+| `realapp_manifest.jsonl` | 46 (human SQLi genuine 18; OpenVuln path 22 genuine, 6 false alarm) | `17122769404317751feb967a2426cc6ee6a9e655e6057e849eae292b0668d92b` |
+| `ai_manifest.jsonl` | 78 (cmdi 36, path 20, SQLi 22; all genuine) | `3f08884f65df70ab25e721f225a939765b2bebcc60f041e826b4d6c92b158efa` |
+| `pending_labels.jsonl` | 207 human-written alerts without a ground-truth match (SQLi 132, path 72, cmdi 3) | `27031e9a1b400bd1f47adcb4ed1e956871922e0daeb33c8c7737f692d0f20219` |
+| `mismatch.jsonl` | 56 (45 ground-truth entries not flagged, 7 not analysed, 3 repos excluded, 1 OpenVuln merge) | `8f6e80e6c3c4947012494a2b4936f97c90e8b9f08e03ac10537d95780c71d4a3` |
+| `labeling_sheet.csv` | 253 (207 above + 46 development alerts) | `1d015bb7cbb64d303915023e8a83cd80aa2a71bb4e94e5cc10852ac6a792b68d` |
+| `labeling_key.csv` | 253 (sheet ID -> alert, source, copy) | `7c13444e07a80e2906834819816c04460fc58e710ae52767a8bb963bf4a5f906` |
+| `name_map.json` | 66 repos | `da4b87c49416132bdd1114afb0cc373a097043e2d1906790974fd32b41e15294` |
+
+- **Ground-truth coverage** (entries CodeQL flagged): human-written 18 of 20 (SQLi 18/18; not flagged: easybuggy path, lamp-cloud cmdi); AI 78 of 121 analysable entries (cmdi 36/46, path 20/44, SQLi 22/31) plus 7 not analysed. The AI track therefore keeps 78 of 128 ground-truth entries; report this number with the results. 65 AI alerts match no ground-truth entry and are **not used** (the AI track is wrong-dismissal only, plan §3.3). CodeQL excluded-rule alerts (`java/relative-path-command`): 45; alerts outside the three families: 1801.
+- All three tracks pass the adapter: `realapp` 46 and `ai` 78 entries = manifest lines, all with a snippet and complete context, routing 28 path / 18 SQLi and 36 cmdi / 20 path / 22 SQLi.
+- Student sheet: columns `sheet_id, family, rule_id, message, location, dataflow, code, label_s1, rationale_s1, label_s2, rationale_s2`; shuffled with a fixed seed; no label, source or copy name; student columns empty; no model output. The words "WebGoat", "fineract" and "VulnerableApp" still appear because they are in the **source code** (package names, annotations); the code is not edited. **Not sent to anyone.**
+
+### Things to state or decide
+1. **Build files and network.** CodeQL's Java `--build-mode=none` calls the repository's build tool (`mvnw`, `gradlew`, Gradle scripts) to resolve dependencies. That would run target-controlled code (AGENTS.md), so the build files are removed from the **copies** (never from the checkouts) and `scan` refuses a copy that still has them. Not removed: `build.xml` (Ant is only detected, not run; `app-04`). CodeQL's own standalone extractor still contacts a package repository to fetch dependency JARs (not executed); the scan therefore depends on the state of the Maven repositories on the scan date. **Disclosure:** an earlier first attempt, before this change, let CodeQL's autobuild run the Maven wrapper on `app-03` for 1-2 minutes (and start it on `app-02`, `app-04`) before it was stopped; those databases were deleted and the repos rescanned, and no manifest used them. I first said no network was needed; that was wrong.
+2. **Pending alerts: 253.** Two students labelling 253 alerts from code is a large job (human-written SQLi 132, path 72, cmdi 3 + development 46). Decide whether to sample, and whether the 46 development alerts go to the students too (they are in the same sheet, ordered at random among the rest).
+3. **AI track size.** 78 of 128 ground-truth entries are flagged by CodeQL and enter the track; the unflagged entries are in `mismatch.jsonl`. This is a limitation to report.
+4. **OpenVuln.** 28 alerts instead of 29; the dataset's alerts come from its own (older) CodeQL run, not from 2.27.4.
+5. **Pooled rule** for the development tier now has numbers (path 12 false alarms); Tuannt to confirm.
+6. Day-2 scripts have formatting differences (`ruff format`) that were already in PR #2; not touched.
+
+### Checks
+Full `tests/` (CodeQL not on PATH): **4144 passed, 2 failed, 214 skipped, 1 collection error** (baseline 3904, same three failures; +240 tests, none failing); `benchmark/tests/`: 58 passed; `ruff check` on the changed files and `mypy src/`: clean; `git diff --check`: clean. New tests: `test_exp_b3c_manifest_adapter.py`, `test_exp_b3c_dev_manifest.py`, `test_exp_b7_match.py`, `test_exp_b7_build.py`, `test_exp_b7_pipeline.py`. Mutation checks: range edges in the matcher, a `source` column in the sheet and the 50-genuine floor in the sampler each fail 2 tests.
+
+### Open at the end of Day 5
+1. Student sheet: sampling decision, then Khoa sends it (not sent). 2. Base PRs (#1 docs, #2 day 2, day 3-4) still need Tuannt's review; then rebase `exp/day5-manifests` and open its PR. 3. Temperature, model and key (before day 9). 4. OWASP commit, 488 genuine alerts, pooled rule: unchanged.

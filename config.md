@@ -165,6 +165,8 @@ Ngoài 3 phase này: `--dry-run` và mock. Mỗi lần gọi thật chỉ chạy
 - Sau khi merge: cập nhật cột "Code hiện tại" ở mục 1.6, 1.7.
 
 ### Ngày 5 – 23/11 – P3 Manifest (B3c, B7; mock)
+> Trạng thái: code + dữ liệu xong, commit `7084c09` trên branch cục bộ `exp/day5-manifests` (xếp chồng lên `exp/day3-4-core` và `exp/day2-data-prep`, **chưa push**). Cổng bước 3 (item phụ thuộc đã merge) được **bỏ qua có chủ đích** theo yêu cầu của Khoa; phải `rebase --onto` khi các PR nền merge. Chi tiết: `docs/paper/run_log.md` (Day 5).
+> Config đã dùng: adapter `alert-manifest` (`--dataset-option manifest=<jsonl>`, `repos_dir`, `snippet_window` 💡 mặc định 40, `strict_hash`); copy tên trung tính `app-NN`/`gen-NN`/`oss-NN` (map ngoài repo); quét CodeQL 2.27.4 `java-security-extended` `--build-mode=none` trên bản copy **đã xóa build file**, 2 job, RAM 3 GB (repo lớn 6–8 GB, một lần một repo).
 - Adapter manifest: 1 `GroundTruthEntry`/alert, `sink_line`, `rule_id`, CWE, message, data-flow path, `metadata.repo_name`, `code_snippet`; nhãn chỉ đọc từ manifest; không redaction rule.
 - Xác nhận `--anchor none` / `--no-redact` không đổi số entry (số entry = số dòng manifest).
 - B7: scan repo track phụ theo mục 1.3; context cho mọi copy.
