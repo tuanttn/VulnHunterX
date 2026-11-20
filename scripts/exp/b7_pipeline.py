@@ -42,7 +42,7 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
 
-from scripts.exp.b3a_scan_manifest import SUITE, parse_alerts, toolchain, write_manifest
+from scripts.exp.b3a_scan_manifest import SUITE, toolchain, write_manifest
 from scripts.exp.b7_build import (
     KEY_COLUMNS,
     LABEL_GENUINE,
@@ -59,6 +59,7 @@ from scripts.exp.b7_match import (
     load_ground_truth,
     match_alerts,
     one_alert_per_location,
+    parse_alerts_with_regions,
     scope_alerts,
 )
 
@@ -667,7 +668,7 @@ def build_manifests(
             continue
         sarif = json.loads(sarif_path.read_text(encoding="utf-8"))
         toolchains.add(json.dumps(toolchain(sarif["runs"][0]), sort_keys=True))
-        alerts, stats = scope_alerts(parse_alerts(sarif))
+        alerts, stats = scope_alerts(parse_alerts_with_regions(sarif))
         for reason, count in stats.items():
             scope_stats[reason] = scope_stats.get(reason, 0) + count
         ground_truth = load_ground_truth(Path(info["ground_truth"]), families_json)

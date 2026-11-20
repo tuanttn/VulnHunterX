@@ -54,6 +54,7 @@ from scripts.exp.b7_match import (
     load_ground_truth,
     match_alerts,
     one_alert_per_location,
+    parse_alerts_with_regions,
     scope_alerts,
 )
 from scripts.exp.dev_data_prep import label_for_line
@@ -171,7 +172,7 @@ def app_rows(
     source: str,
 ) -> dict[str, Any]:
     """Genuine rows (alerts in a ground-truth location) and pending rows (the rest)."""
-    alerts, stats = scope_alerts(parse_alerts(sarif))
+    alerts, stats = scope_alerts(parse_alerts_with_regions(sarif))
     result = match_alerts(one_alert_per_location(alerts), ground_truth)
     cache: dict[str, list] = {}
 

@@ -3,9 +3,10 @@
 
 """B7 matching: CodeQL alerts against RealVuln ground-truth locations (plan v3.3 §3.2).
 
-RealVuln labels vulnerability *locations*, not scanner alerts. An alert that lies
-in a ground-truth location (same file, line inside the range, same family) is
-genuine. Every other alert of the three families has no label yet; a human labels
+RealVuln labels vulnerability *locations*, not scanner alerts. An alert whose lines
+overlap a ground-truth location (same file, same family; v3.3 §3.2 "overlapping lines")
+is genuine. An alert's lines are its region, ``startLine`` to ``endLine``; a region
+without an end line is its start line. Every other alert of the three families has no label yet; a human labels
 it later. Pure functions, no I/O except ``load_ground_truth``; no model is
 involved and no label is read from anything but the ground-truth file.
 
@@ -23,6 +24,7 @@ from collections.abc import Iterable
 from pathlib import Path
 from typing import Any
 
+from scripts.exp.b3a_scan_manifest import parse_alerts
 from scripts.exp.count_dev_alerts import alert_families, in_scope
 
 # group of our three families -> key in RealVuln's cwe-families.json
@@ -75,6 +77,28 @@ def load_ground_truth(path: Path, families_json: Path) -> list[dict[str, Any]]:
     return out
 
 
+def parse_alerts_with_regions(sarif: dict[str, Any]) -> list[dict[str, Any]]:
+    """``parse_alerts`` plus ``end_line`` (the last line of the alert's region).
+
+    ``parse_alerts`` skips results without a location; the same filter is applied here,
+    so the two lists line up one to one.
+    """
+    alerts = parse_alerts(sarif)
+    ends: list[int] = []
+    for result in sarif["runs"][0].get("results", []):
+        locations = result.get("locations") or []
+        if not locations:
+            continue
+        region = locations[0].get("physicalLocation", {}).get("region", {})
+        start = int(region.get("startLine", 0))
+        ends.append(int(region.get("endLine", start) or start))
+    if len(ends) != len(alerts):  # cannot happen while the two filters agree
+        raise ValueError("SARIF results and parsed alerts do not line up")
+    for alert, end in zip(alerts, ends, strict=True):
+        alert["end_line"] = max(end, alert["line"])
+    return alerts
+
+
 def alert_family(alert: dict[str, Any]) -> str | None:
     """The one family of an alert, or None when it has none or several."""
     families = alert_families(alert)
@@ -115,12 +139,14 @@ def one_alert_per_location(alerts: list[dict[str, Any]]) -> list[dict[str, Any]]
 def matching_entries(
     alert: dict[str, Any], ground_truth: Iterable[dict[str, Any]]
 ) -> list[dict[str, Any]]:
-    """Ground-truth entries that contain the alert's line, in the same file and family."""
+    """Ground-truth entries whose lines overlap the alert's region (same file and family)."""
+    first = alert["line"]
+    last = alert.get("end_line", first)
     hits = []
     for entry in ground_truth:
         if entry["family"] != alert["family"]:
             continue
-        if any(f == alert["file"] and s <= alert["line"] <= e for f, s, e in entry["ranges"]):
+        if any(f == alert["file"] and first <= e and last >= s for f, s, e in entry["ranges"]):
             hits.append(entry)
     return hits
 

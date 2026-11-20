@@ -189,3 +189,65 @@ def test_one_alert_can_hit_two_entries_and_reports_both():
     (alert,) = result["matched"]
     assert alert["gt"] == ["g1", "g2"] and alert["source_id"] == "g1"
     assert result["gt_flagged"] == {"g1", "g2"}
+
+
+# ── v3.3 §3.2: "overlapping lines" ───────────────────────────────────────────
+
+
+def test_a_multi_line_alert_overlapping_the_range_is_matched_even_if_it_starts_before_it():
+    alert = {**_located(line=6), "end_line": 9}
+    assert m.match_alerts([alert], [_gt(start=8, end=12)])["matched"]
+    assert not m.match_alerts([{**alert, "end_line": 7}], [_gt(start=8, end=12)])["matched"]
+
+
+def test_a_region_that_ends_where_the_range_starts_overlaps_it():
+    assert m.match_alerts([{**_located(line=5), "end_line": 8}], [_gt(start=8, end=12)])["matched"]
+    assert not m.match_alerts([{**_located(line=5), "end_line": 7}], [_gt(start=8, end=12)])[
+        "matched"
+    ]
+
+
+def test_an_alert_without_an_end_line_is_its_start_line():
+    assert m.match_alerts([_located(line=8)], [_gt(start=8, end=12)])["matched"]
+    assert not m.match_alerts([_located(line=7)], [_gt(start=8, end=12)])["matched"]
+
+
+def _sarif_with(regions):
+    results = [
+        {
+            "ruleId": "java/sql-injection",
+            "message": {"text": "m"},
+            "locations": [
+                {"physicalLocation": {"artifactLocation": {"uri": "A.java"}, "region": r}}
+            ],
+        }
+        for r in regions
+    ]
+    results.insert(1, {"ruleId": "java/sql-injection", "message": {"text": "no location"}})
+    return {
+        "runs": [
+            {
+                "tool": {
+                    "driver": {
+                        "name": "CodeQL",
+                        "rules": [
+                            {
+                                "id": "java/sql-injection",
+                                "properties": {"tags": ["external/cwe/cwe-089"]},
+                            }
+                        ],
+                    }
+                },
+                "results": results,
+            }
+        ]
+    }
+
+
+def test_parse_alerts_with_regions_reads_the_end_line_and_keeps_alignment():
+    alerts = m.parse_alerts_with_regions(
+        _sarif_with(
+            [{"startLine": 6, "endLine": 9}, {"startLine": 20}, {"startLine": 30, "endLine": 0}]
+        )
+    )
+    assert [(a["line"], a["end_line"]) for a in alerts] == [(6, 9), (20, 20), (30, 30)]
